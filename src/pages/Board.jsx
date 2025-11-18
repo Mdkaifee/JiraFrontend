@@ -639,6 +639,15 @@ export default function Board() {
     }
   };
 
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setColumnMenu(null);
+      setActiveMenu(null);
+    };
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, []);
+
   const handleNewSpaceInputChange = (event) => {
     const { name, value } = event.target;
     setNewSpaceForm((prev) => ({ ...prev, [name]: value }));
@@ -1112,7 +1121,10 @@ export default function Board() {
                           ⋮
                         </button>
                         {columnMenu === colId && (
-                          <div className="absolute right-0 top-8 z-30 w-40 rounded-lg border border-gray-200 bg-white shadow-lg">
+                          <div
+                            className="absolute right-0 top-8 z-30 w-40 rounded-lg border border-gray-200 bg-white shadow-lg"
+                            onClick={(event) => event.stopPropagation()}
+                          >
                             <button
                               type="button"
                               className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
@@ -1148,11 +1160,14 @@ export default function Board() {
                                 <h3 className="text-base font-semibold text-gray-900">
                                   {card.title || "Untitled task"}
                                 </h3>
-                                <button
-                                  className="rounded px-2 py-1 text-gray-400 transition hover:bg-gray-100"
-                                  type="button"
-                                  onClick={() => toggleCardMenu(colId, cardIndex)}
-                                >
+                                  <button
+                                    className="rounded px-2 py-1 text-gray-400 transition hover:bg-gray-100"
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      toggleCardMenu(colId, cardIndex);
+                                    }}
+                                  >
                                   ···
                                 </button>
                               </div>
@@ -1184,7 +1199,10 @@ export default function Board() {
                             </article>
                             {activeMenu?.columnId === colId &&
                               activeMenu?.cardIndex === cardIndex && (
-                                <div className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-gray-200 bg-white shadow-lg">
+                                <div
+                                  className="absolute right-0 top-10 z-20 w-40 rounded-lg border border-gray-200 bg-white shadow-lg"
+                                  onClick={(event) => event.stopPropagation()}
+                                >
                                   <button
                                     type="button"
                                     className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
