@@ -1078,7 +1078,7 @@ export default function Board() {
                 return (
                   <section
                     key={colId}
-                    className={`flex min-h-[520px] w-full max-w-xs flex-shrink-0 flex-col rounded-2xl border border-gray-200 bg-white p-4 shadow-lg ${
+                    className={`flex min-h-[520px] w-full max-w-xs flex-shrink-0 flex-col rounded-2xl border border-gray-300 bg-gray-50 p-4 shadow-lg ${
                       draggingCard ? "border-dashed border-blue-200" : ""
                     }`}
                     onDragOver={handleColumnDragOver}
@@ -1137,7 +1137,7 @@ export default function Board() {
                         column.cards.map((card, cardIndex) => (
                           <div className="relative" key={card._id || cardIndex}>
                             <article
-                              className="rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm ring-1 ring-gray-50"
+                              className="rounded-2xl border border-gray-300 bg-gray-100 px-4 py-3 shadow-sm"
                               draggable
                               onDragStart={(event) => handleCardDragStart(event, colId, cardIndex)}
                               onDragEnd={handleCardDragEnd}
@@ -1204,7 +1204,7 @@ export default function Board() {
                           </div>
                         ))
                       ) : (
-                        <div className="rounded-lg border border-dashed border-gray-200 p-4 text-center text-sm text-gray-400">
+                        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-100 p-4 text-center text-sm text-gray-500">
                           No cards yet
                         </div>
                       )}
@@ -1220,7 +1220,7 @@ export default function Board() {
                   </section>
                 );
               })}
-              <section className="flex min-h-[520px] w-full max-w-xs flex-shrink-0 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-violet-200 bg-violet-50/40 p-4 text-center shadow-sm">
+              <section className="flex min-h-[520px] w-full max-w-xs flex-shrink-0 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-violet-300 bg-violet-50 p-4 text-center shadow-sm">
                 {showQuickColumnForm ? (
                   <form className="w-full space-y-3" onSubmit={handleQuickColumnSubmit}>
                     <input

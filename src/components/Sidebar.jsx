@@ -23,6 +23,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const handleLogout = async () => {
     setLoading(true);
@@ -37,12 +38,14 @@ export default function Sidebar() {
       logout();
       navigate("/login", { replace: true });
       setLoading(false);
+      setShowLogoutModal(false);
     }
   };
 
   return (
-    <aside className="relative flex h-screen w-72 flex-col border-r border-gray-100 bg-white/80 p-6 backdrop-blur md:w-64">
-      <Loader show={loading} />
+    <>
+      <aside className="relative flex h-screen w-72 flex-col border-r border-gray-100 bg-white/80 p-6 backdrop-blur md:w-64">
+        <Loader show={loading} />
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <div className="rounded-full bg-violet-100 px-3 py-2 text-sm font-bold uppercase text-violet-700">
@@ -66,12 +69,16 @@ export default function Sidebar() {
             Navigation
           </p>
           <ul className="space-y-1">
-            {NAV_LINKS.map((link) => (
+            {NAV_LINKS.map((link, index) => (
               <li key={link.label}>
                 <button
                   type="button"
                   onClick={() => navigate(link.path)}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-violet-50 hover:text-violet-700"
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${
+                    index === 0
+                      ? "bg-blue-50 text-blue-700"
+                      : "text-gray-600 hover:bg-violet-50 hover:text-violet-700"
+                  }`}
                 >
                   <span className="text-lg">{link.icon}</span>
                   {link.label}
@@ -102,13 +109,39 @@ export default function Sidebar() {
           <p>Drag columns to reorder, or use the ⋮ menu to rename and delete.</p>
         </div>
         <button
-          onClick={handleLogout}
+          onClick={() => setShowLogoutModal(true)}
           disabled={loading}
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-70"
         >
           {loading ? "Signing out..." : "Logout"}
         </button>
       </div>
-    </aside>
+      </aside>
+      {showLogoutModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <p className="text-lg font-semibold text-gray-900">Are you sure you want to logout?</p>
+            <p className="mt-1 text-sm text-gray-500">Your session will end immediately.</p>
+            <div className="mt-4 flex gap-3">
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={loading}
+                className="flex-1 rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-70"
+              >
+                {loading ? "Signing out..." : "Yes, logout"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLogoutModal(false)}
+                className="flex-1 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
