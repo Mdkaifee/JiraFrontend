@@ -5,7 +5,13 @@ import Sidebar from "../components/Sidebar";
 import { AuthContext } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import getErrorMessage from "../utils/getErrorMessage";
-import { getProjectById, updateProject } from "../api/projects";
+import {
+  createProjectColumn,
+  deleteProjectColumn,
+  fetchProjectColumns,
+  getProjectById,
+  updateProjectColumn,
+} from "../api/projects";
 import { fetchUsers } from "../api/users";
 
 export default function Board() {
@@ -18,9 +24,15 @@ export default function Board() {
   const [project, setProject] = useState(location.state?.project || null);
   const [columns, setColumns] = useState(location.state?.project?.columns || []);
   const [loading, setLoading] = useState(false);
+  const [columnsLoading, setColumnsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showColumnManager, setShowColumnManager] = useState(false);
   const [users, setUsers] = useState([]);
+  const [newColumnForm, setNewColumnForm] = useState({ name: "", order: "" });
+  const [columnEdits, setColumnEdits] = useState({});
+  const [deletePrompt, setDeletePrompt] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
+  const [draggingCard, setDraggingCard] = useState(null);
   const [cardModal, setCardModal] = useState({
     open: false,
     columnId: null,
@@ -41,11 +53,23 @@ export default function Board() {
       const res = await getProjectById(projectId, token);
       const fetchedProject = res.data?.project || null;
       setProject(fetchedProject);
-      setColumns(fetchedProject?.columns || []);
     } catch (error) {
       toast.error(getErrorMessage(error, "Failed to load board"));
     } finally {
       setLoading(false);
+    }
+  }, [token, projectId, toast]);
+
+  const loadColumns = useCallback(async () => {
+    if (!token || !projectId) return;
+    setColumnsLoading(true);
+    try {
+      const res = await fetchProjectColumns(projectId, token);
+      setColumns(res.data?.columns || []);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to load board columns"));
+    } finally {
+      setColumnsLoading(false);
     }
   }, [token, projectId, toast]);
 
@@ -65,17 +89,49 @@ export default function Board() {
       navigate("/login", { replace: true });
       return;
     }
-    if (!project) {
-      fetchProject();
-    }
+    fetchProject();
+    loadColumns();
     loadUsers();
-  }, [token, project, fetchProject, navigate, loadUsers]);
+  }, [token, fetchProject, loadColumns, loadUsers, navigate]);
 
   useEffect(() => {
-    setColumns(project?.columns || []);
-  }, [project]);
+    setColumnEdits((prev) => {
+      const validKeys = new Set(columns.map((column) => column._id || column.name));
+      let changed = false;
+      const next = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (validKeys.has(key)) {
+          next[key] = value;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+
+    if (deletePrompt && !columns.some((column) => column.name === deletePrompt.name)) {
+      setDeletePrompt(null);
+    }
+  }, [columns, deletePrompt]);
+
+  useEffect(() => {
+    if (!cardModal.open || !columns.length)
+      return;
+
+    const statusExists = columns.some(
+      (column) => column.name.toLowerCase() === (cardForm.status || "").toLowerCase()
+    );
+
+    if (!statusExists) {
+      setCardForm((prev) => ({
+        ...prev,
+        status: columns[0]?.name || "",
+      }));
+    }
+  }, [cardModal.open, cardForm.status, columns]);
 
   const columnCount = columns.length;
+  const boardBusy = loading || saving || columnsLoading;
 
   const formatDate = (value) => {
     if (!value) return "No due date";
@@ -103,25 +159,24 @@ export default function Board() {
     return label ? label.trim().charAt(0).toUpperCase() : "?";
   };
 
-  const persistColumns = async (nextColumns, successMessage = "Board updated") => {
-    if (!projectId || !token) return;
-    setSaving(true);
-    try {
-      const res = await updateProject(projectId, { columns: nextColumns }, token);
-      const updatedProject = res.data?.project;
-      if (updatedProject) {
-        setProject(updatedProject);
-        setColumns(updatedProject.columns || nextColumns);
-      } else {
-        setColumns(nextColumns);
+  const updateColumnCards = useCallback(
+    async (columnName, cards, successMessage = "Board updated", options = {}) => {
+      const { notify = true } = options;
+      if (!projectId || !token) return;
+      setSaving(true);
+      try {
+        const res = await updateProjectColumn(projectId, columnName, { cards }, token);
+        setColumns(res.data?.columns || []);
+        if (notify)
+          toast.success(res.data?.message || successMessage);
+      } catch (error) {
+        toast.error(getErrorMessage(error, "Failed to update column"));
+      } finally {
+        setSaving(false);
       }
-      toast.success(res.data?.message || successMessage);
-    } catch (error) {
-      toast.error(getErrorMessage(error, "Failed to update board"));
-    } finally {
-      setSaving(false);
-    }
-  }
+    },
+    [projectId, token, toast]
+  );
 
   const openCardModal = (columnId, cardIndex) => {
     const column = columns.find((item) => columnKey(item) === columnId);
@@ -157,31 +212,51 @@ export default function Board() {
     event.preventDefault();
     const { columnId, cardIndex } = cardModal;
     if (!columnId) return;
-    const nextColumns = columns.map((column) => {
-      if (columnKey(column) !== columnId) return column;
-      const cards = [...(column.cards || [])];
-      const existingCard = cards[cardIndex] || {};
-      cards[cardIndex] = {
-        ...existingCard,
-        title: cardForm.title || "Untitled task",
-        description: cardForm.description,
-        dueDate: cardForm.dueDate ? new Date(cardForm.dueDate).toISOString() : null,
-        status: cardForm.status || column.name,
-        assignee: cardForm.assignee || null,
-      };
-      return { ...column, cards };
-    });
-    await persistColumns(nextColumns, "Card updated");
+    const column = columns.find((item) => columnKey(item) === columnId);
+    if (!column) return;
+    const targetStatus = cardForm.status || column.name;
+    const targetColumn = columns.find(
+      (item) => item.name.toLowerCase() === targetStatus.toLowerCase()
+    );
+
+    if (!targetColumn) {
+      toast.error("Select a valid column");
+      return;
+    }
+
+    const cards = [...(column.cards || [])];
+    const existingCard = cards[cardIndex] || {};
+    const isNewCard = cardIndex >= cards.length || !cards[cardIndex];
+    const updatedCard = {
+      ...existingCard,
+      title: cardForm.title || "Untitled task",
+      description: cardForm.description,
+      dueDate: cardForm.dueDate ? new Date(cardForm.dueDate).toISOString() : null,
+      status: targetColumn.name,
+      assignee: cardForm.assignee || null,
+    };
+
+    if (targetColumn.name === column.name) {
+      cards[cardIndex] = updatedCard;
+      await updateColumnCards(column.name, cards, isNewCard ? "Card created" : "Card updated");
+    } else {
+      if (!isNewCard) {
+        const filteredCards = (column.cards || []).filter((_, idx) => idx !== cardIndex);
+        await updateColumnCards(column.name, filteredCards, "Card moved", { notify: false });
+      }
+
+      const destinationCards = [...(targetColumn.cards || []), updatedCard];
+      await updateColumnCards(targetColumn.name, destinationCards, "Card moved");
+    }
+
     closeCardModal();
   };
 
   const handleDeleteCard = async (columnId, cardIndex) => {
-    const nextColumns = columns.map((column) => {
-      if (columnKey(column) !== columnId) return column;
-      const cards = (column.cards || []).filter((_, idx) => idx !== cardIndex);
-      return { ...column, cards };
-    });
-    await persistColumns(nextColumns, "Card removed");
+    const column = columns.find((item) => columnKey(item) === columnId);
+    if (!column) return;
+    const cards = (column.cards || []).filter((_, idx) => idx !== cardIndex);
+    await updateColumnCards(column.name, cards, "Card removed");
     setActiveMenu(null);
   };
 
@@ -193,11 +268,220 @@ export default function Board() {
     setActiveMenu({ columnId, cardIndex });
   };
 
+  const handleRefreshBoard = useCallback(() => {
+    fetchProject();
+    loadColumns();
+  }, [fetchProject, loadColumns]);
+
+  const handleCardDragStart = (event, columnId, cardIndex) => {
+    setDraggingCard({ columnId, cardIndex });
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", JSON.stringify({ columnId, cardIndex }));
+  };
+
+  const handleCardDragEnd = () => {
+    setDraggingCard(null);
+  };
+
+  const handleColumnDragOver = (event) => {
+    if (!draggingCard) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleColumnDrop = async (event, targetColumnId) => {
+    event.preventDefault();
+    if (!draggingCard) return;
+
+    const { columnId, cardIndex } = draggingCard;
+    const sourceColumn = columns.find((item) => columnKey(item) === columnId);
+    const targetColumn = columns.find((item) => columnKey(item) === targetColumnId);
+
+    if (!sourceColumn || !targetColumn) {
+      setDraggingCard(null);
+      return;
+    }
+
+    if (columnKey(sourceColumn) === columnKey(targetColumn)) {
+      setDraggingCard(null);
+      return;
+    }
+
+    const sourceCards = sourceColumn.cards || [];
+    const card = sourceCards[cardIndex];
+
+    if (!card) {
+      setDraggingCard(null);
+      return;
+    }
+
+    const updatedSourceCards = sourceCards.filter((_, idx) => idx !== cardIndex);
+    await updateColumnCards(sourceColumn.name, updatedSourceCards, "Card moved", { notify: false });
+
+    const destinationCards = [
+      ...(targetColumn.cards || []),
+      { ...card, status: targetColumn.name },
+    ];
+    await updateColumnCards(targetColumn.name, destinationCards, "Card moved");
+
+    setDraggingCard(null);
+    setActiveMenu(null);
+  };
+
+  const handleNewColumnInputChange = (event) => {
+    const { name, value } = event.target;
+    setNewColumnForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleCreateColumn = async (event) => {
+    event.preventDefault();
+    if (!projectId || !token) return;
+    const trimmedName = newColumnForm.name.trim();
+    if (!trimmedName) {
+      toast.error("Column name is required");
+      return;
+    }
+    const duplicate = columns.some(
+      (column) => column.name.toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (duplicate) {
+      toast.error("Column already exists");
+      return;
+    }
+    const payload = { name: trimmedName };
+    if (newColumnForm.order) {
+      const parsedOrder = Number(newColumnForm.order);
+      if (!Number.isFinite(parsedOrder) || parsedOrder < 1) {
+        toast.error("Order must be a positive number");
+        return;
+      }
+      payload.order = Math.floor(parsedOrder);
+    }
+
+    setSaving(true);
+    try {
+      const res = await createProjectColumn(projectId, payload, token);
+      setColumns(res.data?.columns || []);
+      toast.success(res.data?.message || "Column created");
+      setNewColumnForm({ name: "", order: "" });
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to create column"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRenameInputChange = (columnId, value) => {
+    setColumnEdits((prev) => ({ ...prev, [columnId]: value }));
+  };
+
+  const handleRenameColumn = async (column) => {
+    const columnId = column._id || column.name;
+    const desiredName = (columnEdits[columnId] ?? column.name).trim();
+    if (!desiredName) {
+      toast.error("Column name cannot be empty");
+      return;
+    }
+    if (desiredName.toLowerCase() === column.name.toLowerCase()) {
+      toast.error("Update the column name before saving");
+      return;
+    }
+    const duplicate = columns.some(
+      (item) => item.name.toLowerCase() === desiredName.toLowerCase() && item.name !== column.name
+    );
+    if (duplicate) {
+      toast.error("Another column already uses this name");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await updateProjectColumn(projectId, column.name, { name: desiredName }, token);
+      setColumns(res.data?.columns || []);
+      toast.success(res.data?.message || "Column renamed");
+      setColumnEdits((prev) => {
+        const next = { ...prev };
+        delete next[columnId];
+        return next;
+      });
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to rename column"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleMoveColumn = async (column, direction) => {
+    const delta = direction === "up" ? -1 : 1;
+    const fallbackOrder = columns.findIndex((item) => columnKey(item) === columnKey(column)) + 1;
+    const currentOrder = typeof column.order === "number" ? column.order : fallbackOrder;
+    const targetOrder = currentOrder + delta;
+    if (targetOrder < 1 || targetOrder > columns.length) return;
+
+    setSaving(true);
+    try {
+      const res = await updateProjectColumn(projectId, column.name, { order: targetOrder }, token);
+      setColumns(res.data?.columns || []);
+      toast.success(res.data?.message || "Column reordered");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to reorder column"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startDeleteColumn = (column) => {
+    const hasCards = Array.isArray(column.cards) && column.cards.length > 0;
+    if (hasCards) {
+      const alternatives = columns.filter((item) => item.name !== column.name);
+      if (!alternatives.length) {
+        toast.error("Move cards to another column before deleting this one");
+        return;
+      }
+      setDeletePrompt({
+        name: column.name,
+        requiresTarget: true,
+        targetColumn: alternatives[0].name,
+      });
+      return;
+    }
+    setDeletePrompt({ name: column.name, requiresTarget: false, targetColumn: "" });
+  };
+
+  const cancelDeleteColumn = () => setDeletePrompt(null);
+
+  const handleDeleteTargetChange = (value) => {
+    setDeletePrompt((prev) => (prev ? { ...prev, targetColumn: value } : prev));
+  };
+
+  const confirmDeleteColumn = async () => {
+    if (!deletePrompt) return;
+    if (deletePrompt.requiresTarget && !deletePrompt.targetColumn) {
+      toast.error("Select a destination column first");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload = deletePrompt.requiresTarget
+        ? { targetColumn: deletePrompt.targetColumn }
+        : {};
+      const res = await deleteProjectColumn(projectId, deletePrompt.name, payload, token);
+      setColumns(res.data?.columns || []);
+      toast.success(res.data?.message || "Column deleted");
+      setDeletePrompt(null);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to delete column"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar />
       <div className="relative flex-1 overflow-y-auto">
-        <Loader show={loading || saving} />
+        <Loader show={boardBusy} />
         <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur px-6 py-5 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -215,7 +499,7 @@ export default function Board() {
               </span>
               <button
                 type="button"
-                onClick={fetchProject}
+                onClick={handleRefreshBoard}
                 className="rounded border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 Refresh board
@@ -238,6 +522,13 @@ export default function Board() {
             >
               Complete sprint
             </button>
+            <button
+              type="button"
+              onClick={() => setShowColumnManager((prev) => !prev)}
+              className="rounded border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700"
+            >
+              {showColumnManager ? "Hide column manager" : "Manage columns"}
+            </button>
           </div>
         </div>
 
@@ -256,6 +547,185 @@ export default function Board() {
             </button>
           </header>
 
+          {showColumnManager && (
+            <div className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Manage board columns</h2>
+                  <p className="text-sm text-gray-500">
+                    Create new statuses, rename existing ones, or reorder the board.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadColumns}
+                  disabled={columnsLoading}
+                  className="rounded border border-gray-200 px-4 py-2 text-sm text-gray-700 disabled:opacity-60"
+                >
+                  Refresh list
+                </button>
+              </div>
+
+              <form
+                onSubmit={handleCreateColumn}
+                className="mt-4 grid gap-3 md:grid-cols-[2fr_1fr_auto]"
+              >
+                <input
+                  name="name"
+                  value={newColumnForm.name}
+                  onChange={handleNewColumnInputChange}
+                  placeholder="New column name"
+                  className="rounded border px-3 py-2 text-sm"
+                />
+                <input
+                  name="order"
+                  type="number"
+                  min="1"
+                  value={newColumnForm.order}
+                  onChange={handleNewColumnInputChange}
+                  placeholder="Order (optional)"
+                  className="rounded border px-3 py-2 text-sm"
+                />
+                <button
+                  type="submit"
+                  className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-70"
+                  disabled={saving}
+                >
+                  Add column
+                </button>
+              </form>
+
+              <div className="mt-4 divide-y divide-gray-100">
+                {columns.length === 0 ? (
+                  <p className="py-4 text-sm text-gray-500">
+                    Columns will appear here once created.
+                  </p>
+                ) : (
+                  columns.map((column, index) => {
+                    const colId = columnKey(column);
+                    const editName = columnEdits[colId] ?? column.name;
+                    const deleting = deletePrompt?.name === column.name;
+                    const otherColumns = columns.filter((item) => item.name !== column.name);
+                    return (
+                      <div key={colId} className="py-4">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="min-w-[180px] flex-1">
+                            <label className="text-xs font-medium uppercase text-gray-500">
+                              Column name
+                            </label>
+                            <input
+                              value={editName}
+                              onChange={(event) =>
+                                handleRenameInputChange(colId, event.target.value)
+                              }
+                              className="mt-1 w-full rounded border px-3 py-2 text-sm"
+                            />
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                              onClick={() => handleRenameColumn(column)}
+                              disabled={saving}
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                              onClick={() => handleMoveColumn(column, "up")}
+                              disabled={saving || index === 0}
+                            >
+                              Move up
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                              onClick={() => handleMoveColumn(column, "down")}
+                              disabled={saving || index === columns.length - 1}
+                            >
+                              Move down
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+                              onClick={() => startDeleteColumn(column)}
+                              disabled={saving}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                        {deleting && (
+                          <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                            {deletePrompt?.requiresTarget ? (
+                              <>
+                                <p className="mb-2">
+                                  Move {column.cards?.length || 0} card(s) into another column:
+                                </p>
+                                <select
+                                  className="w-full rounded border border-red-200 bg-white px-3 py-2 text-sm text-gray-700"
+                                  value={deletePrompt.targetColumn}
+                                  onChange={(event) => handleDeleteTargetChange(event.target.value)}
+                                >
+                                  {otherColumns.map((item) => (
+                                    <option key={item.name} value={item.name}>
+                                      {item.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded bg-red-600 px-3 py-2 text-white disabled:opacity-70"
+                                    onClick={confirmDeleteColumn}
+                                    disabled={saving}
+                                  >
+                                    Move & delete
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded border border-red-200 px-3 py-2 text-red-700"
+                                    onClick={cancelDeleteColumn}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-3">
+                                <p className="text-sm">
+                                  Delete this column and its empty lane permanently?
+                                </p>
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded bg-red-600 px-3 py-2 text-white disabled:opacity-70"
+                                    onClick={confirmDeleteColumn}
+                                    disabled={saving}
+                                  >
+                                    Delete
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="rounded border border-red-200 px-3 py-2 text-red-700"
+                                    onClick={cancelDeleteColumn}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
           {columns.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center text-gray-500">
               No columns yet. Create a space or refresh the board.
@@ -265,7 +735,14 @@ export default function Board() {
               {columns.map((column) => {
                 const colId = columnKey(column);
                 return (
-                  <section key={colId} className="rounded-xl bg-white p-4 shadow-sm">
+                  <section
+                    key={colId}
+                    className={`rounded-xl bg-white p-4 shadow-sm ${
+                      draggingCard ? "border border-dashed border-blue-200" : ""
+                    }`}
+                    onDragOver={handleColumnDragOver}
+                    onDrop={(event) => handleColumnDrop(event, colId)}
+                  >
                     <div className="mb-4 flex items-center justify-between uppercase tracking-wide text-gray-500">
                       <span>{column.name}</span>
                       <span className="text-xs font-semibold text-gray-400">
@@ -277,7 +754,12 @@ export default function Board() {
                       {column.cards?.length ? (
                         column.cards.map((card, cardIndex) => (
                           <div className="relative" key={card._id || cardIndex}>
-                            <article className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+                            <article
+                              className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm"
+                              draggable
+                              onDragStart={(event) => handleCardDragStart(event, colId, cardIndex)}
+                              onDragEnd={handleCardDragEnd}
+                            >
                               <div className="flex items-center justify-between">
                                 <h3 className="text-base font-semibold text-gray-900">
                                   {card.title || "Untitled task"}
@@ -346,6 +828,7 @@ export default function Board() {
                     <button
                       type="button"
                       className="mt-2 w-full rounded border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500"
+                      onClick={() => openCardModal(colId, column.cards?.length || 0)}
                     >
                       + Create
                     </button>
@@ -405,13 +888,19 @@ export default function Board() {
                 </div>
                 <div>
                   <label className="mb-2 block text-sm font-medium text-gray-700">Status</label>
-                  <input
+                  <select
                     className="w-full rounded border px-3 py-2"
                     name="status"
                     value={cardForm.status}
                     onChange={handleCardFormChange}
-                    placeholder="Status label"
-                  />
+                    disabled={!columns.length}
+                  >
+                    {columns.map((column) => (
+                      <option key={columnKey(column)} value={column.name}>
+                        {column.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
