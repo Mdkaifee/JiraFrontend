@@ -42,6 +42,11 @@ export default function Board() {
   const [draggingColumn, setDraggingColumn] = useState(null);
   const [columnMenu, setColumnMenu] = useState(null);
   const [showSpaceModal, setShowSpaceModal] = useState(false);
+  const [renameColumnModal, setRenameColumnModal] = useState({
+    open: false,
+    column: null,
+    value: "",
+  });
   const [newSpaceForm, setNewSpaceForm] = useState({
     name: "",
     description: "",
@@ -554,23 +559,38 @@ export default function Board() {
   };
 
   const handleColumnRenameInline = async (column) => {
+    setColumnMenu(null);
+    setRenameColumnModal({
+      open: true,
+      column,
+      value: column.name,
+    });
+  };
+
+  const closeRenameColumnModal = () =>
+    setRenameColumnModal({ open: false, column: null, value: "" });
+
+  const submitRenameColumn = async (event) => {
+    event.preventDefault();
     if (!projectId || !token) {
       toast.error("Project not loaded");
       return;
     }
-    const nextName = window.prompt("Rename column", column.name);
-    if (nextName === null) {
-      setColumnMenu(null);
+
+    const { column, value } = renameColumnModal;
+    if (!column) {
+      closeRenameColumnModal();
       return;
     }
-    const trimmed = nextName.trim();
+
+    const trimmed = value.trim();
     if (!trimmed) {
       toast.error("Column name cannot be empty");
       return;
     }
 
     if (trimmed.toLowerCase() === column.name.toLowerCase()) {
-      setColumnMenu(null);
+      closeRenameColumnModal();
       return;
     }
 
@@ -587,11 +607,11 @@ export default function Board() {
       const res = await updateProjectColumn(projectId, column.name, { name: trimmed }, token);
       setColumns(res.data?.columns || []);
       toast.success(res.data?.message || "Column renamed");
+      closeRenameColumnModal();
     } catch (error) {
       toast.error(getErrorMessage(error, "Failed to rename column"));
     } finally {
       setSaving(false);
-      setColumnMenu(null);
     }
   };
 
@@ -1322,6 +1342,50 @@ export default function Board() {
                   type="button"
                   onClick={() => setShowSpaceModal(false)}
                   className="rounded-lg border border-transparent px-4 py-2 text-sm font-semibold text-gray-700 hover:text-gray-500"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {renameColumnModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <button
+              type="button"
+              className="absolute right-4 top-4 text-gray-400 hover:text-gray-600"
+              onClick={closeRenameColumnModal}
+            >
+              ×
+            </button>
+            <form onSubmit={submitRenameColumn}>
+              <h2 className="text-xl font-semibold text-gray-900">Rename column</h2>
+              <p className="text-sm text-gray-500">
+                Update the column name. Cards assigned to this column will follow the new label.
+              </p>
+              <input
+                className="mt-4 w-full rounded-lg border border-gray-200 px-4 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                value={renameColumnModal.value}
+                onChange={(event) =>
+                  setRenameColumnModal((prev) => ({ ...prev, value: event.target.value }))
+                }
+                placeholder="Column name"
+                autoFocus
+              />
+              <div className="mt-4 flex gap-3">
+                <button
+                  type="submit"
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-70"
+                  disabled={saving}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                  onClick={closeRenameColumnModal}
                 >
                   Cancel
                 </button>
