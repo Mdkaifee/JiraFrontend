@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import LoginOtp from "./pages/LoginOtp";
 import LoginPassword from "./pages/LoginPassword";
 import Dashboard from "./pages/Dashboard";
+import Board from "./pages/Board";
 import AuthProvider from "./context/AuthContext";
 import { ToastProvider } from "./context/ToastContext";
 
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/login-otp" element={<LoginOtp />} />
 
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/projects/:projectId" element={<Board />} />
           </Routes>
         </BrowserRouter>
       </ToastProvider>
