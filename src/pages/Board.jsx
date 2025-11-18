@@ -6,9 +6,11 @@ import { AuthContext } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import getErrorMessage from "../utils/getErrorMessage";
 import {
+  createProject,
   createProjectColumn,
   deleteProjectColumn,
   fetchProjectColumns,
+  fetchProjects,
   getProjectById,
   updateProjectColumn,
 } from "../api/projects";
@@ -23,17 +25,30 @@ export default function Board() {
 
   const [project, setProject] = useState(location.state?.project || null);
   const [columns, setColumns] = useState(location.state?.project?.columns || []);
+  const [spaces, setSpaces] = useState([]);
   const [loading, setLoading] = useState(false);
   const [columnsLoading, setColumnsLoading] = useState(false);
+  const [spacesLoading, setSpacesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showColumnManager, setShowColumnManager] = useState(false);
   const [users, setUsers] = useState([]);
   const [newColumnForm, setNewColumnForm] = useState({ name: "", order: "" });
+  const [quickColumnForm, setQuickColumnForm] = useState({ name: "", order: "" });
+  const [showQuickColumnForm, setShowQuickColumnForm] = useState(false);
   const [columnEdits, setColumnEdits] = useState({});
   const [deletePrompt, setDeletePrompt] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
   const [draggingCard, setDraggingCard] = useState(null);
   const [draggingColumn, setDraggingColumn] = useState(null);
+  const [columnMenu, setColumnMenu] = useState(null);
+  const [showSpaceModal, setShowSpaceModal] = useState(false);
+  const [newSpaceForm, setNewSpaceForm] = useState({
+    name: "",
+    description: "",
+    boardType: "scrum",
+    status: "created",
+  });
+  const [creatingSpace, setCreatingSpace] = useState(false);
   const [cardModal, setCardModal] = useState({
     open: false,
     columnId: null,
@@ -74,6 +89,19 @@ export default function Board() {
     }
   }, [token, projectId, toast]);
 
+  const loadSpaces = useCallback(async () => {
+    if (!token) return;
+    setSpacesLoading(true);
+    try {
+      const res = await fetchProjects(token);
+      setSpaces(res.data?.projects || []);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to load spaces"));
+    } finally {
+      setSpacesLoading(false);
+    }
+  }, [token, toast]);
+
   const loadUsers = useCallback(async () => {
     if (!token) return;
     try {
@@ -93,7 +121,8 @@ export default function Board() {
     fetchProject();
     loadColumns();
     loadUsers();
-  }, [token, fetchProject, loadColumns, loadUsers, navigate]);
+    loadSpaces();
+  }, [token, fetchProject, loadColumns, loadUsers, loadSpaces, navigate]);
 
   useEffect(() => {
     setColumnEdits((prev) => {
@@ -448,41 +477,189 @@ export default function Board() {
     setNewColumnForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleCreateColumn = async (event) => {
-    event.preventDefault();
-    if (!projectId || !token) return;
-    const trimmedName = newColumnForm.name.trim();
+  const handleInlineColumnInputChange = (event) => {
+    const { name, value } = event.target;
+    setQuickColumnForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const createColumnEntry = async ({ name, order, cards }) => {
+    if (!projectId || !token) return false;
+    const trimmedName = (name || "").trim();
     if (!trimmedName) {
       toast.error("Column name is required");
-      return;
+      return false;
     }
     const duplicate = columns.some(
       (column) => column.name.toLowerCase() === trimmedName.toLowerCase()
     );
     if (duplicate) {
       toast.error("Column already exists");
-      return;
+      return false;
     }
+
+    if (cards !== undefined && !Array.isArray(cards)) {
+      toast.error("Cards must be an array");
+      return false;
+    }
+
     const payload = { name: trimmedName };
-    if (newColumnForm.order) {
-      const parsedOrder = Number(newColumnForm.order);
+    if (order) {
+      const parsedOrder = Number(order);
       if (!Number.isFinite(parsedOrder) || parsedOrder < 1) {
         toast.error("Order must be a positive number");
-        return;
+        return false;
       }
       payload.order = Math.floor(parsedOrder);
     }
+    if (cards)
+      payload.cards = cards;
 
     setSaving(true);
     try {
       const res = await createProjectColumn(projectId, payload, token);
       setColumns(res.data?.columns || []);
       toast.success(res.data?.message || "Column created");
-      setNewColumnForm({ name: "", order: "" });
+      return true;
     } catch (error) {
       toast.error(getErrorMessage(error, "Failed to create column"));
+      return false;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCreateColumn = async (event) => {
+    event.preventDefault();
+    const created = await createColumnEntry(newColumnForm);
+    if (created)
+      setNewColumnForm({ name: "", order: "" });
+  };
+
+  const handleQuickColumnSubmit = async (event) => {
+    event.preventDefault();
+    const created = await createColumnEntry(quickColumnForm);
+    if (created) {
+      setQuickColumnForm({ name: "", order: "" });
+      setShowQuickColumnForm(false);
+    }
+  };
+
+  const cancelQuickColumnForm = () => {
+    setQuickColumnForm({ name: "", order: "" });
+    setShowQuickColumnForm(false);
+  };
+
+  const toggleColumnMenu = (columnId) => {
+    setColumnMenu((prev) => (prev === columnId ? null : columnId));
+  };
+
+  const handleColumnRenameInline = async (column) => {
+    if (!projectId || !token) {
+      toast.error("Project not loaded");
+      return;
+    }
+    const nextName = window.prompt("Rename column", column.name);
+    if (nextName === null) {
+      setColumnMenu(null);
+      return;
+    }
+    const trimmed = nextName.trim();
+    if (!trimmed) {
+      toast.error("Column name cannot be empty");
+      return;
+    }
+
+    if (trimmed.toLowerCase() === column.name.toLowerCase()) {
+      setColumnMenu(null);
+      return;
+    }
+
+    const duplicate = columns.some(
+      (item) => item.name.toLowerCase() === trimmed.toLowerCase() && item.name !== column.name
+    );
+    if (duplicate) {
+      toast.error("Another column already uses this name");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await updateProjectColumn(projectId, column.name, { name: trimmed }, token);
+      setColumns(res.data?.columns || []);
+      toast.success(res.data?.message || "Column renamed");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to rename column"));
+    } finally {
+      setSaving(false);
+      setColumnMenu(null);
+    }
+  };
+
+  const handleColumnDeleteInline = async (column) => {
+    if (!projectId || !token) {
+      toast.error("Project not loaded");
+      return;
+    }
+    if (Array.isArray(column.cards) && column.cards.length) {
+      toast.error("Move cards to another column before deleting this one");
+      setColumnMenu(null);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await deleteProjectColumn(projectId, column.name, {}, token);
+      setColumns(res.data?.columns || []);
+      toast.success(res.data?.message || "Column deleted");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to delete column"));
+    } finally {
+      setSaving(false);
+      setColumnMenu(null);
+    }
+  };
+
+  const handleNewSpaceInputChange = (event) => {
+    const { name, value } = event.target;
+    setNewSpaceForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleCreateSpace = async (event) => {
+    event.preventDefault();
+    if (!token) return;
+
+    const trimmed = newSpaceForm.name.trim();
+    if (!trimmed) {
+      toast.error("Space name is required");
+      return;
+    }
+
+    setCreatingSpace(true);
+    try {
+      const payload = {
+        name: trimmed,
+        description: newSpaceForm.description,
+        boardType: newSpaceForm.boardType,
+        status: newSpaceForm.status,
+      };
+      const res = await createProject(payload, token);
+      const created = res.data?.project;
+      toast.success(res.data?.message || "Space created");
+      setNewSpaceForm({ name: "", description: "", boardType: "scrum", status: "created" });
+      setShowSpaceModal(false);
+
+      if (created?._id) {
+        setSpaces((prev) => [...prev, created]);
+        navigate(`/projects/${created._id}`, { state: { project: created } });
+      } else {
+        loadSpaces();
+        fetchProject();
+        loadColumns();
+      }
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to create space"));
+    } finally {
+      setCreatingSpace(false);
     }
   };
 
@@ -613,6 +790,33 @@ export default function Board() {
             </div>
           </div>
 
+          {spaces.length > 0 && (
+            <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+              {spaces.map((space) => {
+                const isActive = space._id === projectId;
+                return (
+                  <button
+                    key={space._id}
+                    type="button"
+                    onClick={() =>
+                      navigate(`/projects/${space._id}`, { state: { project: space } })
+                    }
+                    className={`rounded-full border px-4 py-1.5 text-sm font-medium ${
+                      isActive
+                        ? "border-violet-300 bg-violet-100 text-violet-800"
+                        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    {space.name}
+                  </button>
+                );
+              })}
+              {spacesLoading && (
+                <span className="text-xs text-gray-500">Loading spaces...</span>
+              )}
+            </div>
+          )}
+
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-gray-600">
             <div className="flex items-center rounded-full border border-gray-200 bg-white px-3 py-1">
               <span className="font-medium text-gray-800">Sprint:</span>
@@ -630,11 +834,22 @@ export default function Board() {
             </button>
             <button
               type="button"
+              onClick={() => setShowSpaceModal(true)}
+              className={`rounded border px-4 py-2 text-sm font-semibold ${
+                showSpaceModal
+                  ? "border-violet-200 bg-violet-100 text-violet-800"
+                  : "border-violet-200 bg-white text-violet-700 hover:bg-violet-50"
+              }`}
+            >
+              + Create space
+            </button>
+            {/* <button
+              type="button"
               onClick={() => setShowColumnManager((prev) => !prev)}
               className="rounded border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700"
             >
               {showColumnManager ? "Hide column manager" : "Manage columns"}
-            </button>
+            </button> */}
           </div>
         </div>
 
@@ -858,10 +1073,43 @@ export default function Board() {
                       onDrop={(event) => handleColumnReorderDrop(event, columnIndex)}
                       title="Drag to reorder column"
                     >
-                      <span>{column.name}</span>
-                      <span className="text-[11px] text-gray-400">
-                        {column.cards?.length || 0} cards
-                      </span>
+                      <div className="flex flex-col">
+                        <span>{column.name}</span>
+                        <span className="text-[11px] font-normal text-gray-400">
+                          {column.cards?.length || 0} cards
+                        </span>
+                      </div>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          className="rounded px-2 py-1 text-gray-400 transition hover:bg-gray-100"
+                          onMouseDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleColumnMenu(colId);
+                          }}
+                        >
+                          ⋮
+                        </button>
+                        {columnMenu === colId && (
+                          <div className="absolute right-0 top-8 z-30 w-40 rounded-lg border border-gray-200 bg-white shadow-lg">
+                            <button
+                              type="button"
+                              className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
+                              onClick={() => handleColumnRenameInline(column)}
+                            >
+                              Rename column
+                            </button>
+                            <button
+                              type="button"
+                              className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                              onClick={() => handleColumnDeleteInline(column)}
+                            >
+                              Delete column
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex flex-1 flex-col gap-4 overflow-y-auto pr-1">
@@ -949,13 +1197,139 @@ export default function Board() {
                       + Create
                     </button>
                   </div>
-                </section>
+                  </section>
                 );
               })}
+              <section className="flex min-h-[520px] w-full max-w-xs flex-shrink-0 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-violet-200 bg-violet-50/40 p-4 text-center shadow-sm">
+                {showQuickColumnForm ? (
+                  <form className="w-full space-y-3" onSubmit={handleQuickColumnSubmit}>
+                    <input
+                      name="name"
+                      value={quickColumnForm.name}
+                      onChange={handleInlineColumnInputChange}
+                      className="w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm focus:border-violet-500 focus:outline-none"
+                      placeholder="Column name"
+                    />
+                    <input
+                      name="order"
+                      value={quickColumnForm.order}
+                      onChange={handleInlineColumnInputChange}
+                      type="number"
+                      min="1"
+                      className="w-full rounded-lg border border-violet-300 bg-white px-3 py-2 text-sm focus:border-violet-500 focus:outline-none"
+                      placeholder="Position (optional)"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="submit"
+                        className="flex-1 rounded-lg bg-violet-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-70"
+                        disabled={saving}
+                      >
+                        Add column
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelQuickColumnForm}
+                        className="flex-1 rounded-lg border border-transparent px-3 py-2 text-sm font-semibold text-violet-700 hover:text-violet-500"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowQuickColumnForm(true)}
+                    className="flex flex-col items-center gap-2 text-violet-700"
+                  >
+                    <span className="text-4xl leading-none">+</span>
+                    <span className="text-sm font-semibold">Add column</span>
+                  </button>
+                )}
+              </section>
             </div>
           )}
         </div>
       </div>
+      {showSpaceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="relative w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl">
+            <button
+              type="button"
+              className="absolute right-4 top-4 text-gray-400 hover:text-gray-600"
+              onClick={() => setShowSpaceModal(false)}
+            >
+              ×
+            </button>
+            <form onSubmit={handleCreateSpace} className="space-y-4">
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-800">Space name</label>
+                <input
+                  name="name"
+                  value={newSpaceForm.name}
+                  onChange={handleNewSpaceInputChange}
+                  className="w-full rounded-lg border border-gray-200 px-4 py-2 text-sm focus:border-violet-400 focus:outline-none"
+                  placeholder="e.g. Marketing board"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-800">Description</label>
+                <textarea
+                  name="description"
+                  value={newSpaceForm.description}
+                  onChange={handleNewSpaceInputChange}
+                  rows={3}
+                  className="w-full rounded-lg border border-gray-200 px-4 py-2 text-sm focus:border-violet-400 focus:outline-none"
+                  placeholder="Optional context for this space"
+                />
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-gray-800">Board type</label>
+                  <select
+                    name="boardType"
+                    value={newSpaceForm.boardType}
+                    onChange={handleNewSpaceInputChange}
+                    className="w-full rounded-lg border border-gray-200 px-4 py-2 text-sm focus:border-violet-400 focus:outline-none"
+                  >
+                    <option value="scrum">Scrum</option>
+                    <option value="kanban">Kanban</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-gray-800">Status</label>
+                  <select
+                    name="status"
+                    value={newSpaceForm.status}
+                    onChange={handleNewSpaceInputChange}
+                    className="w-full rounded-lg border border-gray-200 px-4 py-2 text-sm focus:border-violet-400 focus:outline-none"
+                  >
+                    <option value="created">Created</option>
+                    <option value="in-progress">In progress</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="submit"
+                  className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-70"
+                  disabled={creatingSpace}
+                >
+                  {creatingSpace ? "Creating..." : "Create space"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSpaceModal(false)}
+                  className="rounded-lg border border-transparent px-4 py-2 text-sm font-semibold text-gray-700 hover:text-gray-500"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       {cardModal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
