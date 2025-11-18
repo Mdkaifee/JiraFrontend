@@ -1,11 +1,21 @@
-import { createContext, useState } from "react";
+import { createContext, useMemo, useState } from "react";
 
 export const AuthContext = createContext();
 
+const parseStoredUser = () => {
+  try {
+    const stored = localStorage.getItem("user");
+    return stored ? JSON.parse(stored) : null;
+  } catch (error) {
+    console.warn("Failed to parse stored user. Clearing cache.", error);
+    localStorage.removeItem("user");
+    localStorage.removeItem("token");
+    return null;
+  }
+};
+
 export default function AuthProvider({ children }) {
-  const [user, setUser] = useState(
-    JSON.parse(localStorage.getItem("user")) || null
-  );
+  const [user, setUser] = useState(parseStoredUser);
   const [token, setToken] = useState(localStorage.getItem("token") || null);
 
   const login = (userData, jwt) => {
@@ -22,9 +32,10 @@ export default function AuthProvider({ children }) {
     localStorage.removeItem("token");
   };
 
-  return (
-    <AuthContext.Provider value={{ user, token, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ user, token, login, logout }),
+    [user, token]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

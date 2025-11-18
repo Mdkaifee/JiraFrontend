@@ -33,6 +33,7 @@ export default function Board() {
   const [deletePrompt, setDeletePrompt] = useState(null);
   const [activeMenu, setActiveMenu] = useState(null);
   const [draggingCard, setDraggingCard] = useState(null);
+  const [draggingColumn, setDraggingColumn] = useState(null);
   const [cardModal, setCardModal] = useState({
     open: false,
     columnId: null,
@@ -273,7 +274,104 @@ export default function Board() {
     loadColumns();
   }, [fetchProject, loadColumns]);
 
+  const persistColumnOrder = useCallback(
+    async (columnName, order, successMessage = "Column reordered") => {
+      if (!projectId || !token) return;
+      setSaving(true);
+      try {
+        const res = await updateProjectColumn(projectId, columnName, { order }, token);
+        setColumns(res.data?.columns || []);
+        toast.success(res.data?.message || successMessage);
+      } catch (error) {
+        toast.error(getErrorMessage(error, "Failed to reorder column"));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [projectId, token, toast]
+  );
+
+  const moveColumnToIndex = useCallback(
+    async (sourceIndex, insertIndex) => {
+      if (sourceIndex < 0)
+        return;
+
+      const column = columns[sourceIndex];
+      if (!column)
+        return;
+
+      let targetIndex = Math.max(0, Math.min(insertIndex, columns.length));
+      if (targetIndex > sourceIndex)
+        targetIndex -= 1;
+      targetIndex = Math.max(0, Math.min(targetIndex, columns.length - 1));
+
+      if (targetIndex === sourceIndex)
+        return;
+
+      await persistColumnOrder(column.name, targetIndex + 1);
+    },
+    [columns, persistColumnOrder]
+  );
+
+  const moveDraggedCard = useCallback(
+    async (targetColumnId, insertIndex) => {
+      if (!draggingCard)
+        return;
+
+      const { columnId, cardIndex } = draggingCard;
+      const sourceColumn = columns.find((item) => columnKey(item) === columnId);
+      const targetColumn = columns.find((item) => columnKey(item) === targetColumnId);
+
+      if (!sourceColumn || !targetColumn) {
+        setDraggingCard(null);
+        return;
+      }
+
+      const sourceCards = sourceColumn.cards || [];
+      const card = sourceCards[cardIndex];
+
+      if (!card) {
+        setDraggingCard(null);
+        return;
+      }
+
+      const targetCards = targetColumn.cards || [];
+      const rawIndex =
+        typeof insertIndex === "number" ? insertIndex : targetCards.length;
+
+      if (sourceColumn.name === targetColumn.name) {
+        const reordered = sourceCards.slice();
+        reordered.splice(cardIndex, 1);
+        let targetPosition = rawIndex;
+        if (targetPosition > cardIndex)
+          targetPosition -= 1;
+        targetPosition = Math.max(0, Math.min(targetPosition, reordered.length));
+        reordered.splice(targetPosition, 0, {
+          ...card,
+          status: targetColumn.name,
+        });
+        await updateColumnCards(targetColumn.name, reordered, "Card moved");
+      } else {
+        const sourceNext = sourceCards.filter((_, idx) => idx !== cardIndex);
+        await updateColumnCards(sourceColumn.name, sourceNext, "Card moved", { notify: false });
+
+        const destinationCards = [...targetCards];
+        const safeIndex = Math.max(0, Math.min(rawIndex, destinationCards.length));
+        destinationCards.splice(safeIndex, 0, {
+          ...card,
+          status: targetColumn.name,
+        });
+        await updateColumnCards(targetColumn.name, destinationCards, "Card moved");
+      }
+
+      setDraggingCard(null);
+      setActiveMenu(null);
+    },
+    [columns, draggingCard, updateColumnCards]
+  );
+
   const handleCardDragStart = (event, columnId, cardIndex) => {
+    setDraggingColumn(null);
     setDraggingCard({ columnId, cardIndex });
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", JSON.stringify({ columnId, cardIndex }));
@@ -293,39 +391,56 @@ export default function Board() {
     event.preventDefault();
     if (!draggingCard) return;
 
-    const { columnId, cardIndex } = draggingCard;
-    const sourceColumn = columns.find((item) => columnKey(item) === columnId);
     const targetColumn = columns.find((item) => columnKey(item) === targetColumnId);
+    const nextIndex = targetColumn?.cards?.length || 0;
+    await moveDraggedCard(targetColumnId, nextIndex);
+  };
 
-    if (!sourceColumn || !targetColumn) {
-      setDraggingCard(null);
-      return;
-    }
+  const handleCardDragOver = (event) => {
+    if (!draggingCard) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+  };
 
-    if (columnKey(sourceColumn) === columnKey(targetColumn)) {
-      setDraggingCard(null);
-      return;
-    }
+  const handleCardDrop = async (event, targetColumnId, targetIndex) => {
+    if (!draggingCard) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const dropAfter = event.clientY > rect.top + rect.height / 2;
+    const insertIndex = dropAfter ? targetIndex + 1 : targetIndex;
+    await moveDraggedCard(targetColumnId, insertIndex);
+  };
 
-    const sourceCards = sourceColumn.cards || [];
-    const card = sourceCards[cardIndex];
-
-    if (!card) {
-      setDraggingCard(null);
-      return;
-    }
-
-    const updatedSourceCards = sourceCards.filter((_, idx) => idx !== cardIndex);
-    await updateColumnCards(sourceColumn.name, updatedSourceCards, "Card moved", { notify: false });
-
-    const destinationCards = [
-      ...(targetColumn.cards || []),
-      { ...card, status: targetColumn.name },
-    ];
-    await updateColumnCards(targetColumn.name, destinationCards, "Card moved");
-
+  const handleColumnReorderDragStart = (event, columnId, columnIndex) => {
+    if (draggingCard) return;
     setDraggingCard(null);
-    setActiveMenu(null);
+    setDraggingColumn({ columnId, index: columnIndex });
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", columnId);
+  };
+
+  const handleColumnReorderDragEnd = () => {
+    setDraggingColumn(null);
+  };
+
+  const handleColumnReorderDragOver = (event) => {
+    if (!draggingColumn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleColumnReorderDrop = async (event, targetIndex) => {
+    if (!draggingColumn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const dropAfter = event.clientX > rect.left + rect.width / 2;
+    const insertIndex = dropAfter ? targetIndex + 1 : targetIndex;
+    await moveColumnToIndex(draggingColumn.index, insertIndex);
+    setDraggingColumn(null);
   };
 
   const handleNewColumnInputChange = (event) => {
@@ -418,16 +533,7 @@ export default function Board() {
     const targetOrder = currentOrder + delta;
     if (targetOrder < 1 || targetOrder > columns.length) return;
 
-    setSaving(true);
-    try {
-      const res = await updateProjectColumn(projectId, column.name, { order: targetOrder }, token);
-      setColumns(res.data?.columns || []);
-      toast.success(res.data?.message || "Column reordered");
-    } catch (error) {
-      toast.error(getErrorMessage(error, "Failed to reorder column"));
-    } finally {
-      setSaving(false);
-    }
+    await persistColumnOrder(column.name, targetOrder);
   };
 
   const startDeleteColumn = (column) => {
@@ -731,41 +837,51 @@ export default function Board() {
               No columns yet. Create a space or refresh the board.
             </div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {columns.map((column) => {
+            <div className="flex gap-4 overflow-x-auto pb-4">
+              {columns.map((column, columnIndex) => {
                 const colId = columnKey(column);
                 return (
                   <section
                     key={colId}
-                    className={`rounded-xl bg-white p-4 shadow-sm ${
-                      draggingCard ? "border border-dashed border-blue-200" : ""
+                    className={`flex min-h-[520px] w-full max-w-xs flex-shrink-0 flex-col rounded-2xl border border-gray-200 bg-white p-4 shadow-lg ${
+                      draggingCard ? "border-dashed border-blue-200" : ""
                     }`}
                     onDragOver={handleColumnDragOver}
                     onDrop={(event) => handleColumnDrop(event, colId)}
                   >
-                    <div className="mb-4 flex items-center justify-between uppercase tracking-wide text-gray-500">
+                    <div
+                      className="mb-4 flex cursor-move items-center justify-between rounded-lg bg-gray-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-600"
+                      draggable
+                      onDragStart={(event) => handleColumnReorderDragStart(event, colId, columnIndex)}
+                      onDragEnd={handleColumnReorderDragEnd}
+                      onDragOver={handleColumnReorderDragOver}
+                      onDrop={(event) => handleColumnReorderDrop(event, columnIndex)}
+                      title="Drag to reorder column"
+                    >
                       <span>{column.name}</span>
-                      <span className="text-xs font-semibold text-gray-400">
-                        {column.cards?.length || 0} of 1
+                      <span className="text-[11px] text-gray-400">
+                        {column.cards?.length || 0} cards
                       </span>
                     </div>
 
-                    <div className="space-y-4">
+                    <div className="flex flex-1 flex-col gap-4 overflow-y-auto pr-1">
                       {column.cards?.length ? (
                         column.cards.map((card, cardIndex) => (
                           <div className="relative" key={card._id || cardIndex}>
                             <article
-                              className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm"
+                              className="rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm ring-1 ring-gray-50"
                               draggable
                               onDragStart={(event) => handleCardDragStart(event, colId, cardIndex)}
                               onDragEnd={handleCardDragEnd}
+                              onDragOver={handleCardDragOver}
+                              onDrop={(event) => handleCardDrop(event, colId, cardIndex)}
                             >
                               <div className="flex items-center justify-between">
                                 <h3 className="text-base font-semibold text-gray-900">
                                   {card.title || "Untitled task"}
                                 </h3>
                                 <button
-                                  className="rounded px-2 py-1 text-gray-400 hover:bg-gray-100"
+                                  className="rounded px-2 py-1 text-gray-400 transition hover:bg-gray-100"
                                   type="button"
                                   onClick={() => toggleCardMenu(colId, cardIndex)}
                                 >
@@ -827,7 +943,7 @@ export default function Board() {
 
                     <button
                       type="button"
-                      className="mt-2 w-full rounded border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500"
+                      className="mt-3 w-full rounded border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500"
                       onClick={() => openCardModal(colId, column.cards?.length || 0)}
                     >
                       + Create
