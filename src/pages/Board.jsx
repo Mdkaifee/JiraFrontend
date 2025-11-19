@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Loader from "../components/Loader";
 import Sidebar from "../components/Sidebar";
@@ -66,6 +66,7 @@ export default function Board() {
     status: "",
     assignee: "",
   });
+  const [selectedAssignees, setSelectedAssignees] = useState([]);
 
   const fetchProject = useCallback(async () => {
     if (!token || !projectId) return;
@@ -166,6 +167,16 @@ export default function Board() {
   }, [cardModal.open, cardForm.status, columns]);
 
   const columnCount = columns.length;
+  const filteredColumns = useMemo(() => {
+    if (!selectedAssignees.length) return columns;
+    return columns.map((column) => ({
+      ...column,
+      cards: (column.cards || []).filter((card) => {
+        const assigneeId = card.assignee || "unassigned";
+        return selectedAssignees.includes(assigneeId);
+      }),
+    }));
+  }, [columns, selectedAssignees]);
   const boardBusy = loading || saving || columnsLoading;
 
   const formatDate = (value) => {
@@ -884,17 +895,68 @@ export default function Board() {
 
         <div className="px-6 py-6">
           <header className="mb-6 flex flex-wrap items-center gap-3">
-            <input
-              className="w-full rounded border px-4 py-2 text-sm text-gray-700 sm:max-w-xs"
-              placeholder="Search board"
-              disabled
-            />
-            <button className="rounded border border-gray-200 px-4 py-2 text-sm text-gray-700" type="button">
-              Filter
-            </button>
-            <button className="rounded border border-gray-200 px-4 py-2 text-sm text-gray-700" type="button">
-              Clear filters
-            </button>
+            <span className="text-sm font-semibold text-gray-600">Assignees:</span>
+            <div className="relative group">
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedAssignees((prev) =>
+                    prev.includes("unassigned")
+                      ? prev.filter((id) => id !== "unassigned")
+                      : [...prev, "unassigned"]
+                  )
+                }
+                className={`inline-flex h-9 w-9 items-center justify-center rounded-full border text-sm font-semibold transition ${
+                  selectedAssignees.includes("unassigned")
+                    ? "border-blue-600 bg-blue-600 text-white"
+                    : "border-gray-300 bg-white text-gray-600"
+                }`}
+              >
+                ?
+              </button>
+              <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100">
+                Unassigned
+              </span>
+            </div>
+            {users.map((user) => {
+              const name =
+                user.fullName ||
+                [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+                user.email ||
+                user.username ||
+                "User";
+              const initial = name.trim().charAt(0).toUpperCase();
+              const isSelected = selectedAssignees.includes(user._id);
+              return (
+                <div className="relative group" key={user._id}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedAssignees((prev) =>
+                        isSelected ? prev.filter((id) => id !== user._id) : [...prev, user._id]
+                      )
+                    }
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full border text-sm font-semibold transition ${
+                      isSelected ? "border-blue-600 bg-blue-600 text-white" : "border-gray-300 bg-white text-gray-600"
+                    }`}
+                  >
+                    {initial || "U"}
+                  </button>
+                  <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100">
+                    {name}
+                  </span>
+                </div>
+              );
+            })}
+            {selectedAssignees.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedAssignees([])}
+                className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
+              >
+                Clear
+              </button>
+            )}
           </header>
 
           {showColumnManager && (
@@ -1076,13 +1138,13 @@ export default function Board() {
             </div>
           )}
 
-          {columns.length === 0 ? (
+          {filteredColumns.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-300 bg-white p-10 text-center text-gray-500">
               No columns yet. Create a space or refresh the board.
             </div>
           ) : (
             <div className="flex gap-4 overflow-x-auto pb-4">
-              {columns.map((column, columnIndex) => {
+              {filteredColumns.map((column, columnIndex) => {
                 const colId = columnKey(column);
                 return (
                   <section
@@ -1187,14 +1249,18 @@ export default function Board() {
                                   </span>
                                   {card.status || column.name}
                                 </span>
-                                <button
-                                  type="button"
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-sm font-semibold text-blue-700"
-                                  title={getUserLabel(card.assignee)}
-                                  onClick={() => openCardModal(colId, cardIndex)}
-                                >
-                                  {card.assignee ? getUserInitial(card.assignee) : "?"}
-                                </button>
+                                <div className="relative group">
+                                  <button
+                                    type="button"
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-sm font-semibold text-blue-700"
+                                    onClick={() => openCardModal(colId, cardIndex)}
+                                  >
+                                    {card.assignee ? getUserInitial(card.assignee) : "?"}
+                                  </button>
+                                  <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100">
+                                    {getUserLabel(card.assignee)}
+                                  </span>
+                                </div>
                               </div>
                             </article>
                             {activeMenu?.columnId === colId &&
