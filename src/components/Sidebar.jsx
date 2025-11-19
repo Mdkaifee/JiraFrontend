@@ -52,7 +52,7 @@ export default function Sidebar() {
             {user?.fullName?.slice(0, 2) || "JD"}
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Kaifee</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400"> {user?.fullName}</p>
             <p className="text-base font-semibold text-gray-900">Atlas Workbench</p>
           </div>
         </div>
