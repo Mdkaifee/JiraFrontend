@@ -49,7 +49,7 @@ export default function Sidebar() {
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <div className="rounded-full bg-violet-100 px-3 py-2 text-sm font-bold uppercase text-violet-700">
-            {user?.fullName?.slice(0, 2) || "JD"}
+            {user?.fullName?.slice(0, 1) || "T"}
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-400"> {user?.fullName}</p>
