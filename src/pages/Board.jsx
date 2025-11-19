@@ -896,58 +896,69 @@ export default function Board() {
         <div className="px-6 py-6">
           <header className="mb-6 flex flex-wrap items-center gap-3">
             <span className="text-sm font-semibold text-gray-600">Assignees:</span>
-            <div className="relative group">
-              <button
-                type="button"
-                onClick={() =>
-                  setSelectedAssignees((prev) =>
-                    prev.includes("unassigned")
-                      ? prev.filter((id) => id !== "unassigned")
-                      : [...prev, "unassigned"]
-                  )
-                }
-                className={`inline-flex h-9 w-9 items-center justify-center rounded-full border text-sm font-semibold transition ${
-                  selectedAssignees.includes("unassigned")
-                    ? "border-blue-600 bg-blue-600 text-white"
-                    : "border-gray-300 bg-white text-gray-600"
+            <div className="flex items-center pl-3">
+              <div
+                className={`relative group -ml-3 first:ml-0 ${
+                  selectedAssignees.includes("unassigned") ? "z-10" : "z-0"
                 }`}
               >
-                ?
-              </button>
-              <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100">
-                Unassigned
-              </span>
-            </div>
-            {users.map((user) => {
-              const name =
-                user.fullName ||
-                [user.firstName, user.lastName].filter(Boolean).join(" ") ||
-                user.email ||
-                user.username ||
-                "User";
-              const initial = name.trim().charAt(0).toUpperCase();
-              const isSelected = selectedAssignees.includes(user._id);
-              return (
-                <div className="relative group" key={user._id}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSelectedAssignees((prev) =>
-                        isSelected ? prev.filter((id) => id !== user._id) : [...prev, user._id]
-                      )
-                    }
-                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full border text-sm font-semibold transition ${
-                      isSelected ? "border-blue-600 bg-blue-600 text-white" : "border-gray-300 bg-white text-gray-600"
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedAssignees((prev) =>
+                      prev.includes("unassigned")
+                        ? prev.filter((id) => id !== "unassigned")
+                        : [...prev, "unassigned"]
+                    )
+                  }
+                  className={`inline-flex h-9 w-9 items-center justify-center rounded-full border text-sm font-semibold transition ${
+                    selectedAssignees.includes("unassigned")
+                      ? "border-blue-600 bg-blue-600 text-white"
+                      : "border-gray-300 bg-white text-gray-600"
+                  }`}
+                >
+                  ?
+                </button>
+                <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100">
+                  Unassigned
+                </span>
+              </div>
+              {users.map((user) => {
+                const name =
+                  user.fullName ||
+                  [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+                  user.email ||
+                  user.username ||
+                  "User";
+                const initial = name.trim().charAt(0).toUpperCase();
+                const isSelected = selectedAssignees.includes(user._id);
+                return (
+                  <div
+                    className={`relative group -ml-3 ${
+                      isSelected ? "z-10" : "z-0"
                     }`}
+                    key={user._id}
                   >
-                    {initial || "U"}
-                  </button>
-                  <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100">
-                    {name}
-                  </span>
-                </div>
-              );
-            })}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedAssignees((prev) =>
+                          isSelected ? prev.filter((id) => id !== user._id) : [...prev, user._id]
+                        )
+                      }
+                      className={`inline-flex h-9 w-9 items-center justify-center rounded-full border text-sm font-semibold transition ${
+                        isSelected ? "border-blue-600 bg-blue-600 text-white" : "border-gray-300 bg-white text-gray-600"
+                      }`}
+                    >
+                      {initial || "U"}
+                    </button>
+                    <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100">
+                      {name}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
             {selectedAssignees.length > 0 && (
               <button
                 type="button"
