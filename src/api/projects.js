@@ -80,6 +80,16 @@ export const inviteProjectMember = (projectId, payload, token) =>
     },
   });
 
+export const revokeProjectInvite = (projectId, payload, token) =>
+  axios.delete(`${API}/${projectId}/invite`, {
+    ...withAuth(token),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    data: payload,
+  });
+
 export const acceptProjectInvite = (projectId, token) =>
   axios.post(
     `${API}/${projectId}/accept-invite`,

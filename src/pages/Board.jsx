@@ -6,6 +6,12 @@ import { AuthContext } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useInvites } from "../context/InvitesContext";
 import getErrorMessage from "../utils/getErrorMessage";
+import formatInviteResults from "../utils/formatInviteResults";
+import {
+  getInviteUserIdentifier,
+  getInviteUserEmail,
+  normalizeInviteEmail,
+} from "../utils/inviteEligibility";
 import {
   createProject,
   createProjectColumn,
@@ -14,6 +20,7 @@ import {
   fetchProjects,
   getProjectById,
   inviteProjectMember,
+  revokeProjectInvite,
   updateProjectColumn,
 } from "../api/projects";
 import { fetchUsers } from "../api/users";
@@ -35,7 +42,8 @@ export default function Board() {
   const [saving, setSaving] = useState(false);
   const [showColumnManager, setShowColumnManager] = useState(false);
   const [settingsTab, setSettingsTab] = useState("columns");
-  const [inviteEmail, setInviteEmail] = useState("");
+  const [pendingInviteAddIds, setPendingInviteAddIds] = useState([]);
+  const [pendingInviteRemovalIds, setPendingInviteRemovalIds] = useState([]);
   const [invitingMember, setInvitingMember] = useState(false);
   const [users, setUsers] = useState([]);
   const [newColumnForm, setNewColumnForm] = useState({ name: "", order: "" });
@@ -254,7 +262,24 @@ export default function Board() {
   const boardBusy = loading || saving || columnsLoading;
   const rawMembers = Array.isArray(project?.members) ? project.members : [];
   const userId = user?._id || null;
-  const ownerId = extractUserId(project?.owner);
+  const resolvedOwnerId = useMemo(() => {
+    const direct = extractUserId(project?.owner);
+    if (direct) return direct;
+    const ownerMember = rawMembers.find((entry) => {
+      const role =
+        entry?.role ||
+        entry?.user?.role ||
+        entry?.member?.role ||
+        "";
+      return typeof role === "string" && role.toLowerCase() === "owner";
+    });
+    if (ownerMember) {
+      const target = ownerMember?.user || ownerMember?.member || ownerMember;
+      return extractUserId(target);
+    }
+    return null;
+  }, [project, rawMembers]);
+  const ownerId = resolvedOwnerId;
   const isOwner = Boolean(userId && ownerId && userId === ownerId);
   const isCollaborator = Boolean(
     userId &&
@@ -307,6 +332,98 @@ export default function Board() {
     });
     return entries;
   })();
+
+  const currentUserId = getInviteUserIdentifier(user);
+  const projectOwnerId = useMemo(() => getInviteUserIdentifier(project?.owner), [project]);
+  const workspaceUsers = useMemo(
+    () =>
+      (users || []).filter((entry) => {
+        const id = getInviteUserIdentifier(entry);
+        return id && id !== currentUserId;
+      }),
+    [users, currentUserId]
+  );
+
+  const memberMap = useMemo(() => {
+    const map = new Map();
+    if (!project) return map;
+    (project.members || []).forEach((entry) => {
+      const target = entry?.user || entry?.member || entry;
+      const id = getInviteUserIdentifier(target);
+      if (!id) return;
+      map.set(id, entry);
+    });
+    if (project.owner) {
+      const ownerKey = getInviteUserIdentifier(project.owner);
+      if (ownerKey) map.set(ownerKey, { ...project.owner, role: "Owner" });
+    }
+    return map;
+  }, [project]);
+
+  const inviteMaps = useMemo(() => {
+    const byId = new Map();
+    const byEmail = new Map();
+    if (!project) return { byId, byEmail };
+    const inviteList = project.invites || project.pendingInvites || [];
+    inviteList.forEach((invite) => {
+      const target = invite?.user || invite?.invitedUser || invite;
+      const id = getInviteUserIdentifier(target);
+      if (id) byId.set(id, invite);
+      const emailCandidate =
+        invite?.email || invite?.inviteEmail || getInviteUserEmail(target) || invite?.username;
+      const normalized = normalizeInviteEmail(emailCandidate);
+      if (normalized) byEmail.set(normalized, invite);
+    });
+    return { byId, byEmail };
+  }, [project]);
+
+  const inviteEntries = useMemo(() => {
+    return workspaceUsers.map((entry) => {
+      const id = getInviteUserIdentifier(entry);
+      const email = getInviteUserEmail(entry);
+      const normalizedEmail = normalizeInviteEmail(email);
+      const isOwner = Boolean(projectOwnerId && id && id === projectOwnerId);
+      const memberInfo = id && memberMap.get(id) && !isOwner ? memberMap.get(id) : null;
+      const inviteInfo =
+        (id && inviteMaps.byId.get(id)) || (normalizedEmail && inviteMaps.byEmail.get(normalizedEmail));
+      let status = "available";
+      if (isOwner) status = "owner";
+      else if (memberInfo) status = "member";
+      else if (inviteInfo) status = "invited";
+      return {
+        id,
+        email,
+        normalizedEmail,
+        user: entry,
+        status,
+        isOwner,
+        memberInfo,
+        inviteInfo,
+      };
+    });
+  }, [workspaceUsers, projectOwnerId, memberMap, inviteMaps]);
+
+  const pendingInviteAddSet = useMemo(() => new Set(pendingInviteAddIds), [pendingInviteAddIds]);
+  const pendingInviteRemovalSet = useMemo(
+    () => new Set(pendingInviteRemovalIds),
+    [pendingInviteRemovalIds]
+  );
+  const hasInviteTeammates = inviteEntries.length > 0;
+  const availableInviteEntries = useMemo(
+    () => inviteEntries.filter((entry) => entry.status === "available"),
+    [inviteEntries]
+  );
+  const allAvailableInviteesSelected = availableInviteEntries.length
+    ? availableInviteEntries.every((entry) => pendingInviteAddSet.has(entry.id))
+    : false;
+  const hasPendingInviteChanges =
+    pendingInviteAddIds.length > 0 || pendingInviteRemovalIds.length > 0;
+
+  useEffect(() => {
+    setPendingInviteAddIds([]);
+    setPendingInviteRemovalIds([]);
+  }, [projectId, project?.members?.length, project?.invites?.length]);
+
   useEffect(() => {
     if (!canAccessSettings && showColumnManager) {
       setShowColumnManager(false);
@@ -673,27 +790,107 @@ export default function Board() {
     setShowQuickColumnForm(false);
   };
 
+  const toggleInviteeSelection = (entry) => {
+    if (!entry?.id || entry.isOwner || !canInviteMembers) return;
+    if (entry.status === "available") {
+      setPendingInviteRemovalIds((prev) => prev.filter((id) => id !== entry.id));
+      setPendingInviteAddIds((prev) =>
+        prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]
+      );
+      return;
+    }
+    setPendingInviteAddIds((prev) => prev.filter((id) => id !== entry.id));
+    setPendingInviteRemovalIds((prev) =>
+      prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]
+    );
+  };
+
+  const handleSelectAllInvitees = () => {
+    if (!hasInviteTeammates || !canInviteMembers) return;
+    const inviteIds = inviteEntries.filter((entry) => entry.id && !entry.isOwner).map((entry) => entry.id);
+    setPendingInviteAddIds(inviteIds);
+    setPendingInviteRemovalIds([]);
+  };
+
+  const handleClearInviteSelections = () => {
+    const removalIds = inviteEntries.filter((entry) => entry.id && !entry.isOwner).map((entry) => entry.id);
+    setPendingInviteAddIds([]);
+    setPendingInviteRemovalIds(removalIds);
+  };
+
   const handleInviteMember = async (event) => {
     event.preventDefault();
     if (!projectId || !token) {
       toast.error("Project not loaded");
       return;
     }
-    if (!inviteEmail.trim()) {
-      toast.error("Enter an email address");
+    if (!canInviteMembers) {
+      toast.error("Only project owners can manage invitations");
       return;
     }
 
+    const additions = inviteEntries.filter((entry) => pendingInviteAddSet.has(entry.id));
+    const removals = inviteEntries.filter((entry) => pendingInviteRemovalSet.has(entry.id));
+
+    if (additions.length === 0 && removals.length === 0) {
+      toast.error("Select at least one change to apply");
+      return;
+    }
+
+    const additionEmails = additions
+      .map((entry) => normalizeInviteEmail(entry.email))
+      .filter(Boolean);
+    if (additions.length > 0 && additionEmails.length !== additions.length) {
+      toast.error("Some teammates do not have valid email addresses");
+      return;
+    }
+
+    const removalEmails = removals
+      .map((entry) => normalizeInviteEmail(entry.email))
+      .filter(Boolean);
+    if (removals.length > 0 && removalEmails.length !== removals.length) {
+      toast.error("Cannot revoke access for teammates without email addresses");
+      return;
+    }
+
+    const aggregateResults = (resultList) => {
+      const totals = {};
+      resultList.forEach((result) => {
+        if (!result || typeof result !== "object") return;
+        Object.entries(result).forEach(([key, value]) => {
+          if (typeof value === "number") {
+            totals[key] = (totals[key] || 0) + value;
+          } else if (value === true) {
+            totals[key] = (totals[key] || 0) + 1;
+          }
+        });
+      });
+      return totals;
+    };
+
     setInvitingMember(true);
     try {
-      const payload = { email: inviteEmail.trim().toLowerCase() };
-      const res = await inviteProjectMember(projectId, payload, token);
-      toast.success(res.data?.message || "Invitation sent");
-      setInviteEmail("");
+      if (additionEmails.length > 0) {
+        const payload =
+          additionEmails.length === 1 ? { email: additionEmails[0] } : { emails: additionEmails };
+        const res = await inviteProjectMember(projectId, payload, token);
+        toast.success(
+          formatInviteResults(res.data?.results, res.data?.message || "Invitations updated")
+        );
+      }
+
+      if (removalEmails.length > 0) {
+        const payload = removalEmails.length === 1 ? { email: removalEmails[0] } : { emails: removalEmails };
+        const res = await revokeProjectInvite(projectId, payload, token);
+        toast.success(formatInviteResults(res.data?.results, res.data?.message || "Updated project access"));
+      }
+
+      setPendingInviteAddIds([]);
+      setPendingInviteRemovalIds([]);
       await fetchProject();
       await loadSpaces();
     } catch (error) {
-      toast.error(getErrorMessage(error, "Failed to send invite"));
+      toast.error(getErrorMessage(error, "Failed to update teammates"));
     } finally {
       setInvitingMember(false);
     }
@@ -948,6 +1145,15 @@ export default function Board() {
               </h1>
             </div>
             <div className="flex items-center gap-3">
+              <span
+                className={`rounded-full px-3 py-1 text-sm font-medium ${
+                  isOwner
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-orange-50 text-orange-600"
+                }`}
+              >
+                {isOwner ? "Owner" : "Collaborator"}
+              </span>
               <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium capitalize text-blue-700">
                 {project?.status || "created"}
               </span>
@@ -968,6 +1174,25 @@ export default function Board() {
             <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
               {spaces.map((space) => {
                 const isActive = space._id === projectId;
+                const spaceOwnerId = (() => {
+                  const direct = extractUserId(space.owner);
+                  if (direct) return direct;
+                  const ownerMember = (space.members || []).find((member) => {
+                    const role =
+                      member?.role ||
+                      member?.user?.role ||
+                      member?.member?.role ||
+                      "";
+                    return typeof role === "string" && role.toLowerCase() === "owner";
+                  });
+                  if (ownerMember) {
+                    const target = ownerMember?.user || ownerMember?.member || ownerMember;
+                    return extractUserId(target);
+                  }
+                  return null;
+                })();
+                const spaceRoleLabel =
+                  spaceOwnerId && userId && spaceOwnerId === userId ? "Owner" : "Collaborator";
                 return (
                   <button
                     key={space._id}
@@ -981,7 +1206,16 @@ export default function Board() {
                         : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
                     }`}
                   >
-                    {space.name}
+                    <span>{space.name}</span>
+                    <span
+                      className={`ml-2 rounded-full px-2 py-0.5 text-xs ${
+                        spaceRoleLabel === "Owner"
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-gray-100 text-gray-600"
+                      }`}
+                    >
+                      {spaceRoleLabel}
+                    </span>
                   </button>
                 );
               })}
@@ -1328,32 +1562,122 @@ export default function Board() {
                 </>
               ) : (
                 <div className="mt-4 space-y-4">
-                  <form className="flex flex-col gap-3 md:flex-row" onSubmit={handleInviteMember}>
-                    <input
-                      type="email"
-                      name="inviteEmail"
-                      value={inviteEmail}
-                      onChange={(event) => setInviteEmail(event.target.value)}
-                      placeholder="teammate@email.com"
-                      className="flex-1 rounded border px-3 py-2 text-sm"
-                      disabled={!canInviteMembers}
-                    />
+                  <form className="space-y-3" onSubmit={handleInviteMember}>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-sm font-semibold text-gray-800">Teammates</p>
+                        <div className="flex items-center gap-2">
+                          {hasInviteTeammates && (
+                            <>
+                              <button
+                                type="button"
+                                className="text-xs font-semibold text-blue-600 hover:underline disabled:opacity-40"
+                                onClick={handleSelectAllInvitees}
+                                disabled={!canInviteMembers || invitingMember}
+                              >
+                                Select all
+                              </button>
+                              <span className="text-gray-300">|</span>
+                              <button
+                                type="button"
+                                className="text-xs font-semibold text-gray-500 hover:underline disabled:opacity-40"
+                                onClick={handleClearInviteSelections}
+                                disabled={!canInviteMembers || invitingMember}
+                              >
+                                Deselect all
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-gray-200">
+                        {hasInviteTeammates ? (
+                          <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
+                            {inviteEntries.map((inviteUser) => {
+                              const label =
+                                inviteUser.user.fullName ||
+                                [inviteUser.user.firstName, inviteUser.user.lastName]
+                                  .filter(Boolean)
+                                  .join(" ") ||
+                                inviteUser.user.email ||
+                                inviteUser.user.username ||
+                                "Teammate";
+                              const email = inviteUser.email;
+                              const baseChecked =
+                                inviteUser.status === "owner" ||
+                                inviteUser.status === "member" ||
+                                inviteUser.status === "invited";
+                              const isChecked =
+                                inviteUser.status === "available"
+                                  ? pendingInviteAddSet.has(inviteUser.id)
+                                  : baseChecked && !pendingInviteRemovalSet.has(inviteUser.id);
+                              const disableToggle = inviteUser.isOwner || !canInviteMembers || invitingMember;
+                              const statusLabel =
+                                inviteUser.status === "owner"
+                                  ? "Owner"
+                                  : inviteUser.status === "member"
+                                  ? "Member"
+                                  : inviteUser.status === "invited"
+                                  ? "Invited"
+                                  : pendingInviteAddSet.has(inviteUser.id)
+                                  ? "Pending invite"
+                                  : pendingInviteRemovalSet.has(inviteUser.id)
+                                  ? "Will be removed"
+                                  : "";
+                              return (
+                                <label
+                                  key={inviteUser.id}
+                                  className="flex cursor-pointer items-center gap-3 px-4 py-3"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                    checked={isChecked}
+                                    disabled={disableToggle}
+                                    onChange={() => toggleInviteeSelection(inviteUser)}
+                                  />
+                                  <div className="flex flex-1 items-center justify-between">
+                                    <div>
+                                      <p className="text-sm font-semibold text-gray-800">{label}</p>
+                                      {email && <p className="text-xs text-gray-500">{email}</p>}
+                                    </div>
+                                    {statusLabel && (
+                                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
+                                        {statusLabel}
+                                      </span>
+                                    )}
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="p-4 text-sm text-gray-500">
+                            No other teammates are available in this workspace.
+                          </p>
+                        )}
+                      </div>
+                      <p className="mt-2 text-xs text-gray-500">
+                        Checked teammates already have access or pending invites. Uncheck to revoke,
+                        or check available teammates to invite them.
+                      </p>
+                    </div>
                     <button
                       type="submit"
-                      className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                      disabled={!canInviteMembers || invitingMember}
+                      className="w-full rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      disabled={!canInviteMembers || invitingMember || !hasPendingInviteChanges}
                     >
-                      {invitingMember ? "Sending..." : "Send invite"}
+                      {invitingMember ? "Updating..." : "Update access"}
                     </button>
                   </form>
-                  {!canInviteMembers && (
+                  {!canInviteMembers ? (
                     <p className="text-xs text-gray-500">
                       Only project owners can send invitations.
                     </p>
-                  )}
-                  {canInviteMembers && (
+                  ) : (
                     <p className="text-xs text-gray-500">
-                      Existing users are added immediately; everyone else receives an email invitation.
+                      Selected teammates already have accounts, so they&apos;ll see the space right
+                      after the invite.
                     </p>
                   )}
                   <div className="rounded-lg border border-gray-100">
