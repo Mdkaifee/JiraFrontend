@@ -4,6 +4,7 @@ import Loader from "../components/Loader";
 import Sidebar from "../components/Sidebar";
 import { AuthContext } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { useInvites } from "../context/InvitesContext";
 import getErrorMessage from "../utils/getErrorMessage";
 import {
   createProject,
@@ -12,6 +13,7 @@ import {
   fetchProjectColumns,
   fetchProjects,
   getProjectById,
+  inviteProjectMember,
   updateProjectColumn,
 } from "../api/projects";
 import { fetchUsers } from "../api/users";
@@ -21,7 +23,8 @@ export default function Board() {
   const location = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
-  const { token } = useContext(AuthContext);
+  const { lastAccepted } = useInvites();
+  const { token, user } = useContext(AuthContext);
 
   const [project, setProject] = useState(location.state?.project || null);
   const [columns, setColumns] = useState(location.state?.project?.columns || []);
@@ -31,6 +34,9 @@ export default function Board() {
   const [spacesLoading, setSpacesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showColumnManager, setShowColumnManager] = useState(false);
+  const [settingsTab, setSettingsTab] = useState("columns");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [invitingMember, setInvitingMember] = useState(false);
   const [users, setUsers] = useState([]);
   const [newColumnForm, setNewColumnForm] = useState({ name: "", order: "" });
   const [quickColumnForm, setQuickColumnForm] = useState({ name: "", order: "" });
@@ -131,6 +137,15 @@ export default function Board() {
   }, [token, fetchProject, loadColumns, loadUsers, loadSpaces, navigate]);
 
   useEffect(() => {
+    if (!lastAccepted?.at) return;
+    loadSpaces();
+    if (lastAccepted.projectId === projectId) {
+      fetchProject();
+      loadColumns();
+    }
+  }, [lastAccepted, projectId, loadSpaces, fetchProject, loadColumns]);
+
+  useEffect(() => {
     setColumnEdits((prev) => {
       const validKeys = new Set(columns.map((column) => column._id || column.name));
       let changed = false;
@@ -166,19 +181,6 @@ export default function Board() {
     }
   }, [cardModal.open, cardForm.status, columns]);
 
-  const columnCount = columns.length;
-  const filteredColumns = useMemo(() => {
-    if (!selectedAssignees.length) return columns;
-    return columns.map((column) => ({
-      ...column,
-      cards: (column.cards || []).filter((card) => {
-        const assigneeId = card.assignee || "unassigned";
-        return selectedAssignees.includes(assigneeId);
-      }),
-    }));
-  }, [columns, selectedAssignees]);
-  const boardBusy = loading || saving || columnsLoading;
-
   const formatDate = (value) => {
     if (!value) return "No due date";
     try {
@@ -204,6 +206,112 @@ export default function Board() {
     const label = getUserLabel(userId);
     return label ? label.trim().charAt(0).toUpperCase() : "?";
   };
+
+  const extractUserId = (value) => {
+    if (!value) return null;
+    if (typeof value === "string") return value;
+    if (value._id) return value._id;
+    if (value.id) return value.id;
+    if (value.userId) return value.userId;
+    if (value.user) return extractUserId(value.user);
+    return null;
+  };
+
+  const getMemberDisplay = (member) => {
+    if (!member) return { id: "", name: "Unknown user", email: "" };
+    if (typeof member === "string") {
+      const match = users.find((item) => item._id === member);
+      return {
+        id: member,
+        name: match ? getUserLabel(member) : member,
+        email: match?.email || "",
+      };
+    }
+    if (member.user) return getMemberDisplay(member.user);
+    const id = member._id || member.id || member.userId || member.email || member.username || "";
+    const name =
+      member.fullName ||
+      [member.firstName, member.lastName].filter(Boolean).join(" ") ||
+      member.email ||
+      member.username ||
+      id ||
+      "Member";
+    const email = member.email || member.userEmail || member.username || "";
+    return { id, name, email };
+  };
+
+  const columnCount = columns.length;
+  const filteredColumns = useMemo(() => {
+    if (!selectedAssignees.length) return columns;
+    return columns.map((column) => ({
+      ...column,
+      cards: (column.cards || []).filter((card) => {
+        const assigneeId = card.assignee || "unassigned";
+        return selectedAssignees.includes(assigneeId);
+      }),
+    }));
+  }, [columns, selectedAssignees]);
+  const boardBusy = loading || saving || columnsLoading;
+  const rawMembers = Array.isArray(project?.members) ? project.members : [];
+  const userId = user?._id || null;
+  const ownerId = extractUserId(project?.owner);
+  const isOwner = Boolean(userId && ownerId && userId === ownerId);
+  const isCollaborator = Boolean(
+    userId &&
+      rawMembers.some((entry) => {
+        const target = entry?.user || entry?.member || entry;
+        return extractUserId(target) === userId;
+      })
+  );
+  const canAccessSettings = isOwner || isCollaborator;
+  const canInviteMembers = isOwner;
+  const memberEntries = (() => {
+    const entries = [];
+    const seen = new Set();
+    if (project?.owner) {
+      const info = getMemberDisplay(project.owner);
+      const key = ownerId || info.id || `owner-${projectId || "current"}`;
+      seen.add(key);
+      entries.push({
+        key,
+        ...info,
+        role: "Owner",
+        joinedAt: project?.createdAt || project?.createdOn || null,
+        status: "active",
+      });
+    }
+    rawMembers.forEach((entry, index) => {
+      const target = entry?.user || entry?.member || entry;
+      if (!target) return;
+      const info = getMemberDisplay(target);
+      const key = info.id || info.email || `member-${index}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const joinedAt =
+        entry?.joinedAt || entry?.acceptedAt || entry?.addedAt || entry?.invitedAt || null;
+      const status =
+        entry?.status ||
+        (entry?.joinedAt || entry?.acceptedAt
+          ? "active"
+          : entry?.invitedAt
+          ? "pending invite"
+          : "");
+      entries.push({
+        key,
+        ...info,
+        role:
+          entry?.role && entry.role.toLowerCase() === "owner" ? "Owner" : entry?.role || "Collaborator",
+        joinedAt,
+        status,
+      });
+    });
+    return entries;
+  })();
+  useEffect(() => {
+    if (!canAccessSettings && showColumnManager) {
+      setShowColumnManager(false);
+    }
+  }, [canAccessSettings, showColumnManager]);
 
   const updateColumnCards = useCallback(
     async (columnName, cards, successMessage = "Board updated", options = {}) => {
@@ -565,6 +673,32 @@ export default function Board() {
     setShowQuickColumnForm(false);
   };
 
+  const handleInviteMember = async (event) => {
+    event.preventDefault();
+    if (!projectId || !token) {
+      toast.error("Project not loaded");
+      return;
+    }
+    if (!inviteEmail.trim()) {
+      toast.error("Enter an email address");
+      return;
+    }
+
+    setInvitingMember(true);
+    try {
+      const payload = { email: inviteEmail.trim().toLowerCase() };
+      const res = await inviteProjectMember(projectId, payload, token);
+      toast.success(res.data?.message || "Invitation sent");
+      setInviteEmail("");
+      await fetchProject();
+      await loadSpaces();
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to send invite"));
+    } finally {
+      setInvitingMember(false);
+    }
+  };
+
   const toggleColumnMenu = (columnId) => {
     setColumnMenu((prev) => (prev === columnId ? null : columnId));
   };
@@ -883,13 +1017,19 @@ export default function Board() {
             >
               + Create space
             </button>
-            {/* <button
-              type="button"
-              onClick={() => setShowColumnManager((prev) => !prev)}
-              className="rounded border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700"
-            >
-              {showColumnManager ? "Hide column manager" : "Manage columns"}
-            </button> */}
+            {/* {canAccessSettings && (
+              <button
+                type="button"
+                onClick={() => setShowColumnManager((prev) => !prev)}
+                className={`rounded border px-4 py-2 text-sm font-semibold transition ${
+                  showColumnManager
+                    ? "border-blue-200 bg-blue-100 text-blue-800"
+                    : "border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                }`}
+              >
+                {showColumnManager ? "Hide project settings" : "Project settings"}
+              </button>
+            )} */}
           </div>
         </div>
 
@@ -970,182 +1110,290 @@ export default function Board() {
             )}
           </header>
 
-          {showColumnManager && (
+          {showColumnManager && canAccessSettings && (
             <div className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Manage board columns</h2>
+                  <h2 className="text-lg font-semibold text-gray-900">Project settings</h2>
                   <p className="text-sm text-gray-500">
-                    Create new statuses, rename existing ones, or reorder the board.
+                    Configure board columns and manage collaborators.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={loadColumns}
-                  disabled={columnsLoading}
-                  className="rounded border border-gray-200 px-4 py-2 text-sm text-gray-700 disabled:opacity-60"
-                >
-                  Refresh list
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex rounded-full border border-gray-200 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsTab("columns")}
+                      className={`rounded-full px-4 py-1 text-sm font-semibold ${
+                        settingsTab === "columns"
+                          ? "bg-blue-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      Columns
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettingsTab("members")}
+                      className={`rounded-full px-4 py-1 text-sm font-semibold ${
+                        settingsTab === "members"
+                          ? "bg-blue-600 text-white"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      Members
+                    </button>
+                  </div>
+                  {settingsTab === "columns" ? (
+                    <button
+                      type="button"
+                      onClick={loadColumns}
+                      disabled={columnsLoading}
+                      className="rounded border border-gray-200 px-4 py-2 text-sm text-gray-700 disabled:opacity-60"
+                    >
+                      Refresh columns
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={fetchProject}
+                      disabled={loading}
+                      className="rounded border border-gray-200 px-4 py-2 text-sm text-gray-700 disabled:opacity-60"
+                    >
+                      Refresh members
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <form
-                onSubmit={handleCreateColumn}
-                className="mt-4 grid gap-3 md:grid-cols-[2fr_1fr_auto]"
-              >
-                <input
-                  name="name"
-                  value={newColumnForm.name}
-                  onChange={handleNewColumnInputChange}
-                  placeholder="New column name"
-                  className="rounded border px-3 py-2 text-sm"
-                />
-                <input
-                  name="order"
-                  type="number"
-                  min="1"
-                  value={newColumnForm.order}
-                  onChange={handleNewColumnInputChange}
-                  placeholder="Order (optional)"
-                  className="rounded border px-3 py-2 text-sm"
-                />
-                <button
-                  type="submit"
-                  className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-70"
-                  disabled={saving}
-                >
-                  Add column
-                </button>
-              </form>
+              {settingsTab === "columns" ? (
+                <>
+                  <form
+                    onSubmit={handleCreateColumn}
+                    className="mt-4 grid gap-3 md:grid-cols-[2fr_1fr_auto]"
+                  >
+                    <input
+                      name="name"
+                      value={newColumnForm.name}
+                      onChange={handleNewColumnInputChange}
+                      placeholder="New column name"
+                      className="rounded border px-3 py-2 text-sm"
+                    />
+                    <input
+                      name="order"
+                      type="number"
+                      min="1"
+                      value={newColumnForm.order}
+                      onChange={handleNewColumnInputChange}
+                      placeholder="Order (optional)"
+                      className="rounded border px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-70"
+                      disabled={saving}
+                    >
+                      Add column
+                    </button>
+                  </form>
 
-              <div className="mt-4 divide-y divide-gray-100">
-                {columns.length === 0 ? (
-                  <p className="py-4 text-sm text-gray-500">
-                    Columns will appear here once created.
-                  </p>
-                ) : (
-                  columns.map((column, index) => {
-                    const colId = columnKey(column);
-                    const editName = columnEdits[colId] ?? column.name;
-                    const deleting = deletePrompt?.name === column.name;
-                    const otherColumns = columns.filter((item) => item.name !== column.name);
-                    return (
-                      <div key={colId} className="py-4">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="min-w-[180px] flex-1">
-                            <label className="text-xs font-medium uppercase text-gray-500">
-                              Column name
-                            </label>
-                            <input
-                              value={editName}
-                              onChange={(event) =>
-                                handleRenameInputChange(colId, event.target.value)
-                              }
-                              className="mt-1 w-full rounded border px-3 py-2 text-sm"
-                            />
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
-                              onClick={() => handleRenameColumn(column)}
-                              disabled={saving}
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
-                              onClick={() => handleMoveColumn(column, "up")}
-                              disabled={saving || index === 0}
-                            >
-                              Move up
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
-                              onClick={() => handleMoveColumn(column, "down")}
-                              disabled={saving || index === columns.length - 1}
-                            >
-                              Move down
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
-                              onClick={() => startDeleteColumn(column)}
-                              disabled={saving}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                        {deleting && (
-                          <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
-                            {deletePrompt?.requiresTarget ? (
-                              <>
-                                <p className="mb-2">
-                                  Move {column.cards?.length || 0} card(s) into another column:
-                                </p>
-                                <select
-                                  className="w-full rounded border border-red-200 bg-white px-3 py-2 text-sm text-gray-700"
-                                  value={deletePrompt.targetColumn}
-                                  onChange={(event) => handleDeleteTargetChange(event.target.value)}
+                  <div className="mt-4 divide-y divide-gray-100">
+                    {columns.length === 0 ? (
+                      <p className="py-4 text-sm text-gray-500">
+                        Columns will appear here once created.
+                      </p>
+                    ) : (
+                      columns.map((column, index) => {
+                        const colId = columnKey(column);
+                        const editName = columnEdits[colId] ?? column.name;
+                        const deleting = deletePrompt?.name === column.name;
+                        const otherColumns = columns.filter((item) => item.name !== column.name);
+                        return (
+                          <div key={colId} className="py-4">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <div className="min-w-[180px] flex-1">
+                                <label className="text-xs font-medium uppercase text-gray-500">
+                                  Column name
+                                </label>
+                                <input
+                                  value={editName}
+                                  onChange={(event) =>
+                                    handleRenameInputChange(colId, event.target.value)
+                                  }
+                                  className="mt-1 w-full rounded border px-3 py-2 text-sm"
+                                />
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                                  onClick={() => handleRenameColumn(column)}
+                                  disabled={saving}
                                 >
-                                  {otherColumns.map((item) => (
-                                    <option key={item.name} value={item.name}>
-                                      {item.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    className="rounded bg-red-600 px-3 py-2 text-white disabled:opacity-70"
-                                    onClick={confirmDeleteColumn}
-                                    disabled={saving}
-                                  >
-                                    Move & delete
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="rounded border border-red-200 px-3 py-2 text-red-700"
-                                    onClick={cancelDeleteColumn}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </>
-                            ) : (
-                              <div className="flex flex-wrap items-center gap-3">
-                                <p className="text-sm">
-                                  Delete this column and its empty lane permanently?
-                                </p>
-                                <div className="flex gap-2">
-                                  <button
-                                    type="button"
-                                    className="rounded bg-red-600 px-3 py-2 text-white disabled:opacity-70"
-                                    onClick={confirmDeleteColumn}
-                                    disabled={saving}
-                                  >
-                                    Delete
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="rounded border border-red-200 px-3 py-2 text-red-700"
-                                    onClick={cancelDeleteColumn}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                                  onClick={() => handleMoveColumn(column, "up")}
+                                  disabled={saving || index === 0}
+                                >
+                                  Move up
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                                  onClick={() => handleMoveColumn(column, "down")}
+                                  disabled={saving || index === columns.length - 1}
+                                >
+                                  Move down
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+                                  onClick={() => startDeleteColumn(column)}
+                                  disabled={saving}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                            {deleting && (
+                              <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                                {deletePrompt?.requiresTarget ? (
+                                  <>
+                                    <p className="mb-2">
+                                      Move {column.cards?.length || 0} card(s) into another column:
+                                    </p>
+                                    <select
+                                      className="w-full rounded border border-red-200 bg-white px-3 py-2 text-sm text-gray-700"
+                                      value={deletePrompt.targetColumn}
+                                      onChange={(event) => handleDeleteTargetChange(event.target.value)}
+                                    >
+                                      {otherColumns.map((item) => (
+                                        <option key={item.name} value={item.name}>
+                                          {item.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      <button
+                                        type="button"
+                                        className="rounded bg-red-600 px-3 py-2 text-white disabled:opacity-70"
+                                        onClick={confirmDeleteColumn}
+                                        disabled={saving}
+                                      >
+                                        Move & delete
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="rounded border border-red-200 px-3 py-2 text-red-700"
+                                        onClick={cancelDeleteColumn}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="flex flex-wrap items-center gap-3">
+                                    <p className="text-sm">
+                                      Delete this column and its empty lane permanently?
+                                    </p>
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        className="rounded bg-red-600 px-3 py-2 text-white disabled:opacity-70"
+                                        onClick={confirmDeleteColumn}
+                                        disabled={saving}
+                                      >
+                                        Delete
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="rounded border border-red-200 px-3 py-2 text-red-700"
+                                        onClick={cancelDeleteColumn}
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-4 space-y-4">
+                  <form className="flex flex-col gap-3 md:flex-row" onSubmit={handleInviteMember}>
+                    <input
+                      type="email"
+                      name="inviteEmail"
+                      value={inviteEmail}
+                      onChange={(event) => setInviteEmail(event.target.value)}
+                      placeholder="teammate@email.com"
+                      className="flex-1 rounded border px-3 py-2 text-sm"
+                      disabled={!canInviteMembers}
+                    />
+                    <button
+                      type="submit"
+                      className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                      disabled={!canInviteMembers || invitingMember}
+                    >
+                      {invitingMember ? "Sending..." : "Send invite"}
+                    </button>
+                  </form>
+                  {!canInviteMembers && (
+                    <p className="text-xs text-gray-500">
+                      Only project owners can send invitations.
+                    </p>
+                  )}
+                  {canInviteMembers && (
+                    <p className="text-xs text-gray-500">
+                      Existing users are added immediately; everyone else receives an email invitation.
+                    </p>
+                  )}
+                  <div className="rounded-lg border border-gray-100">
+                    {memberEntries.length === 0 ? (
+                      <p className="p-4 text-sm text-gray-500">
+                        Members will show up once they join this space.
+                      </p>
+                    ) : (
+                      <ul className="divide-y divide-gray-100">
+                        {memberEntries.map((member) => (
+                          <li
+                            key={member.key}
+                            className="flex flex-wrap items-center justify-between gap-3 p-4"
+                          >
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900">{member.name}</p>
+                              <p className="text-xs text-gray-500">
+                                {member.email || "No email provided"}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-semibold text-gray-700">{member.role}</p>
+                              {member.joinedAt && (
+                                <p className="text-xs text-gray-500">
+                                  Since {formatDate(member.joinedAt)}
+                                </p>
+                              )}
+                              {member.status && member.status !== "active" && (
+                                <p className="text-xs font-medium text-amber-600 capitalize">
+                                  {member.status.replace(/-/g, " ")}
+                                </p>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -5,25 +5,28 @@ import { logoutUser } from "../api/auth";
 import { AuthContext } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import getErrorMessage from "../utils/getErrorMessage";
+import { useInvites } from "../context/InvitesContext";
+import InvitesModal from "./InvitesModal";
+import InviteMemberModal from "./InviteMemberModal";
 
 const NAV_LINKS = [
-  { label: "Dashboard", path: "/dashboard", icon: "🏠" },
-  { label: "Spaces", path: "/dashboard", icon: "🗂️" },
-  { label: "Reports", path: "/dashboard", icon: "📊" },
-  { label: "Team", path: "/dashboard", icon: "👥" },
-];
-
-const ACTIONS = [
-  { label: "Create space", icon: "＋" },
-  { label: "Invite teammate", icon: "✉️" },
+  { label: "Dashboard", path: "/dashboard", icon: "D" },
+  { label: "Spaces", path: "/dashboard", icon: "S" },
+  { label: "Reports", path: "/dashboard", icon: "R" },
+  { label: "Team", path: "/dashboard", icon: "T" },
 ];
 
 export default function Sidebar() {
   const { token, user, logout } = useContext(AuthContext);
+  const { invites, loading: invitesLoading, refreshInvites } = useInvites();
   const navigate = useNavigate();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showInvitesModal, setShowInvitesModal] = useState(false);
+  const [showInviteMemberModal, setShowInviteMemberModal] = useState(false);
+
+  const pendingInvites = invites?.length || 0;
 
   const handleLogout = async () => {
     setLoading(true);
@@ -42,81 +45,160 @@ export default function Sidebar() {
     }
   };
 
+  const handleOpenInvites = () => {
+    setShowInvitesModal(true);
+    refreshInvites();
+  };
+
+  const quickActions = [
+    {
+      label: "Create space",
+      icon: "+",
+      onClick: () => navigate("/dashboard"),
+    },
+    {
+      label: "Invite teammate",
+      icon: (
+        <svg
+          className="h-5 w-5 text-gray-500"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+          <circle cx="8.5" cy="7" r="4" />
+          <path d="M20 8v6" />
+          <path d="M23 11h-6" />
+        </svg>
+      ),
+      onClick: () => setShowInviteMemberModal(true),
+    },
+  ];
+
   return (
     <>
       <aside className="relative flex h-screen w-72 flex-col border-r border-gray-100 bg-white/80 p-6 backdrop-blur md:w-64">
         <Loader show={loading} />
-      <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="rounded-full bg-violet-100 px-3 py-2 text-sm font-bold uppercase text-violet-700">
-            {user?.fullName?.slice(0, 1) || "T"}
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="rounded-full bg-violet-100 px-3 py-2 text-sm font-bold uppercase text-violet-700">
+              {user?.fullName?.slice(0, 1) || "T"}
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                {user?.fullName}
+              </p>
+              <p className="text-base font-semibold text-gray-900">Atlas Workbench</p>
+            </div>
           </div>
+          <div className="rounded-2xl bg-gradient-to-r from-violet-500 to-blue-500 p-4 text-white shadow-lg">
+            <p className="text-xs uppercase tracking-widest text-white/70">Focus sprint</p>
+            <p className="mt-1 text-lg font-semibold">Sprint 12 · Alpha</p>
+            <p className="text-xs text-white/70">Estimated wrap in 4 days</p>
+          </div>
+        </div>
+
+        <nav className="mt-6 flex-1 space-y-5">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400"> {user?.fullName}</p>
-            <p className="text-base font-semibold text-gray-900">Atlas Workbench</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Navigation
+            </p>
+            <ul className="space-y-1">
+              {NAV_LINKS.map((link, index) => (
+                <li key={link.label}>
+                  <button
+                    type="button"
+                    onClick={() => navigate(link.path)}
+                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${
+                      index === 0
+                        ? "bg-blue-50 text-blue-700"
+                        : "text-gray-600 hover:bg-violet-50 hover:text-violet-700"
+                    }`}
+                  >
+                    <span className="text-lg font-semibold" aria-hidden>
+                      {link.icon}
+                    </span>
+                    {link.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
-        </div>
-        <div className="rounded-2xl bg-gradient-to-r from-violet-500 to-blue-500 p-4 text-white shadow-lg">
-          <p className="text-xs uppercase tracking-widest text-white/70">Focus sprint</p>
-          <p className="mt-1 text-lg font-semibold">Sprint 12 · Alpha</p>
-          <p className="text-xs text-white/70">Estimated wrap in 4 days</p>
-        </div>
-      </div>
 
-      <nav className="mt-6 flex-1 space-y-5">
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
-            Navigation
-          </p>
-          <ul className="space-y-1">
-            {NAV_LINKS.map((link, index) => (
-              <li key={link.label}>
-                <button
-                  type="button"
-                  onClick={() => navigate(link.path)}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition ${
-                    index === 0
-                      ? "bg-blue-50 text-blue-700"
-                      : "text-gray-600 hover:bg-violet-50 hover:text-violet-700"
-                  }`}
-                >
-                  <span className="text-lg">{link.icon}</span>
-                  {link.label}
-                </button>
-              </li>
+          <div className="space-y-3 rounded-2xl border border-dashed border-gray-200 p-3">
+            <p className="text-sm font-semibold text-gray-800">Quick actions</p>
+            {quickActions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.onClick}
+                className="flex w-full items-center gap-3 rounded-xl border border-gray-200 px-3 py-2 text-sm font-medium text-gray-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+              >
+                <span className="flex h-6 w-6 items-center justify-center text-lg" aria-hidden>
+                  {action.icon}
+                </span>
+                {action.label}
+              </button>
             ))}
-          </ul>
-        </div>
-
-        <div className="space-y-3 rounded-2xl border border-dashed border-gray-200 p-3">
-          <p className="text-sm font-semibold text-gray-800">Quick actions</p>
-          {ACTIONS.map((action) => (
             <button
-              key={action.label}
               type="button"
-              className="flex w-full items-center gap-3 rounded-xl border border-gray-200 px-3 py-2 text-sm font-medium text-gray-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+              onClick={handleOpenInvites}
+              className="relative flex w-full items-center gap-3 rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+              disabled={invitesLoading}
             >
-              <span className="text-lg">{action.icon}</span>
-              {action.label}
+              <span className="flex h-6 w-6 items-center justify-center text-lg" aria-hidden>
+                <svg
+                  className="h-5 w-5 text-gray-500"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M4 6h16v12H4z" />
+                  <path d="m4 8 8 5 8-5" />
+                </svg>
+              </span>
+              {invitesLoading ? "Loading invites..." : "Project invitations"}
+              {pendingInvites > 0 && (
+                <span className="ml-auto inline-flex min-w-[28px] justify-center rounded-full bg-blue-600 px-2 py-0.5 text-xs font-bold text-white">
+                  {pendingInvites}
+                </span>
+              )}
             </button>
-          ))}
-        </div>
-      </nav>
+          </div>
+        </nav>
 
-      <div className="space-y-3">
-        <div className="rounded-2xl bg-gray-50 p-3 text-xs text-gray-500">
-          <p className="font-semibold text-gray-700">Workspace tips</p>
-          <p>Drag columns to reorder, or use the ⋮ menu to rename and delete.</p>
+        <div className="space-y-3">
+          <div className="rounded-2xl bg-gray-50 p-3 text-xs text-gray-500">
+            <p className="font-semibold text-gray-700">Workspace tips</p>
+            <p>Drag columns to reorder, or use the column menu to rename and delete.</p>
+          </div>
+          <button
+            onClick={() => setShowLogoutModal(true)}
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {loading ? "Signing out..." : "Logout"}
+          </button>
         </div>
-        <button
-          onClick={() => setShowLogoutModal(true)}
-          disabled={loading}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:bg-black disabled:cursor-not-allowed disabled:opacity-70"
-        >
-          {loading ? "Signing out..." : "Logout"}
-        </button>
-      </div>
       </aside>
+
+      {showInviteMemberModal && (
+        <InviteMemberModal
+          open={showInviteMemberModal}
+          onClose={() => setShowInviteMemberModal(false)}
+        />
+      )}
+
+      {showInvitesModal && (
+        <InvitesModal open={showInvitesModal} onClose={() => setShowInvitesModal(false)} />
+      )}
+
       {showLogoutModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
           <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">

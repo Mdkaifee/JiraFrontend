@@ -6,6 +6,7 @@ import { AuthContext } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import getErrorMessage from "../utils/getErrorMessage";
 import { createProject, fetchProjects, updateProject } from "../api/projects";
+import { useInvites } from "../context/InvitesContext";
 
 const statusOptions = [
   { label: "Created", value: "created" },
@@ -20,6 +21,7 @@ const boardTypes = [
 
 export default function Dashboard() {
   const { user, token } = useContext(AuthContext);
+  const { lastAccepted } = useInvites();
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -62,6 +64,11 @@ export default function Dashboard() {
     }
     loadProjects();
   }, [token, navigate, loadProjects]);
+
+  useEffect(() => {
+    if (!lastAccepted?.at) return;
+    loadProjects();
+  }, [lastAccepted, loadProjects]);
 
   useEffect(() => {
     if (!updateId) {

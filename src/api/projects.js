@@ -67,3 +67,28 @@ export const deleteProjectColumn = (projectId, columnName, payload = {}, token) 
     },
     data: payload,
   });
+
+export const fetchProjectInvitations = (token) =>
+  axios.get(`${API}/invitations`, withAuth(token));
+
+export const inviteProjectMember = (projectId, payload, token) =>
+  axios.post(`${API}/${projectId}/invite`, payload, {
+    ...withAuth(token),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+export const acceptProjectInvite = (projectId, token) =>
+  axios.post(
+    `${API}/${projectId}/accept-invite`,
+    {},
+    {
+      ...withAuth(token),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );

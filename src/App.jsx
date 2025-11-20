@@ -11,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import Board from "./pages/Board";
 import AuthProvider, { AuthContext } from "./context/AuthContext";
 import { ToastProvider, useToast } from "./context/ToastContext";
+import { InvitesProvider } from "./context/InvitesContext";
 
 function SessionWatcher() {
   const { logout } = useContext(AuthContext);
@@ -53,21 +54,23 @@ export default function App() {
   return (
     <AuthProvider>
       <ToastProvider>
-        <SessionWatcher />
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Signup />} />
-            <Route path="/signup-otp" element={<SignupOtp />} />
-            <Route path="/profile-setup" element={<ProfileSetup />} />
+        <InvitesProvider>
+          <SessionWatcher />
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Signup />} />
+              <Route path="/signup-otp" element={<SignupOtp />} />
+              <Route path="/profile-setup" element={<ProfileSetup />} />
 
-            <Route path="/login" element={<Login />} />
-            <Route path="/login-password" element={<LoginPassword />} />
-            <Route path="/login-otp" element={<LoginOtp />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/login-password" element={<LoginPassword />} />
+              <Route path="/login-otp" element={<LoginOtp />} />
 
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/projects/:projectId" element={<Board />} />
-          </Routes>
-        </BrowserRouter>
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/projects/:projectId" element={<Board />} />
+            </Routes>
+          </BrowserRouter>
+        </InvitesProvider>
       </ToastProvider>
     </AuthProvider>
   );
